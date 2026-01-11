@@ -1,0 +1,1 @@
+terraform import filemanager_swift_service.main swift-main

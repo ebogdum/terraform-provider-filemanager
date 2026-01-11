@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config version="1.0">
+  <database>
+    <host>localhost</host>
+    <port>5432</port>
+    <name>myapp</name>
+  </database>
+  <server>
+    <listen>0.0.0.0</listen>
+    <port>8080</port>
+  </server>
+  <features>
+    <feature enabled="true">authentication</feature>
+    <feature enabled="true">logging</feature>
+    <feature enabled="false">debug</feature>
+  </features>
+</config>

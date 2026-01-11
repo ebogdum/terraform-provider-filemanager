@@ -1,0 +1,32 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: "Functions"
+description: |-
+  {{plainmarkdown .Summary | trimspace}}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{.Summary}}
+
+## Signature
+
+{{ .FunctionSignatureMarkdown }}
+
+## Arguments
+
+{{ .FunctionArgumentsMarkdown }}
+
+{{- if .HasVariadic}}
+
+### Variadic Argument
+
+{{ .FunctionVariadicArgumentMarkdown }}
+{{- end}}
+
+{{- if .HasExample}}
+
+## Example Usage
+
+{{tffile .ExampleFile}}
+{{- end}}

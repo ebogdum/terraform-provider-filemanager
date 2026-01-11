@@ -1,0 +1,1 @@
+terraform import filemanager_gcs_operation.upload_config configs/app/config.json

@@ -1,0 +1,160 @@
+---
+page_title: "Provider: FileManager"
+description: |-
+  The FileManager provider enables comprehensive file and directory management with ACID guarantees, supporting multiple storage backends and structured content formats.
+---
+
+# FileManager Provider
+
+The FileManager provider enables comprehensive file and directory management with ACID guarantees, supporting multiple storage backends (local filesystem, SSH/SFTP, S3, Azure Blob, GCS, and more) and structured content formats (JSON, YAML, TOML, HCL, XML, INI).
+
+## Features
+
+- **ACID Guarantees** - Atomic writes, file locking, checksum verification for data integrity
+- **Multiple Backends** - Local filesystem, SSH/SFTP, S3, Azure Blob Storage, Google Cloud Storage, Backblaze B2, FTP/FTPS, OpenStack Swift
+- **Structured Content** - Native support for JSON, YAML, TOML, HCL, XML, INI, and ENV files with deep merge capabilities
+- **Application Configs** - Pre-built templates for nginx, consul, prometheus, grafana, and other common applications
+- **Zero-Copy Transfers** - Optimized file transfers using sendfile, splice, and copy_file_range
+
+## Example Usage
+
+{{ tffile "examples/provider/provider.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Authentication and Configuration
+
+### Local Filesystem
+
+No authentication required. The provider uses the local filesystem by default.
+
+### SSH/SFTP Backend
+
+```hcl
+resource "filemanager_ssh_service" "server" {
+  name        = "webserver"
+  host        = "server.example.com"
+  port        = 22
+  user        = "deploy"
+  private_key = file("~/.ssh/id_rsa")
+}
+
+resource "filemanager_file" "remote_config" {
+  path    = "/etc/app/config.json"
+  content = jsonencode({ key = "value" })
+  service = filemanager_ssh_service.server.name
+}
+```
+
+### S3-Compatible Storage
+
+```hcl
+resource "filemanager_s3_service" "bucket" {
+  name       = "my-bucket"
+  bucket     = "my-terraform-files"
+  region     = "us-east-1"
+  access_key = var.aws_access_key
+  secret_key = var.aws_secret_key
+}
+
+resource "filemanager_upload" "config" {
+  source      = "local/config.json"
+  destination = "configs/app.json"
+  service     = filemanager_s3_service.bucket.name
+}
+```
+
+## Resource Categories
+
+### File Management
+
+Basic file and directory operations with ACID guarantees.
+
+- [filemanager_file](resources/file.md) - Manage files with atomic writes
+- [filemanager_sensitive_file](resources/sensitive_file.md) - Manage files with sensitive content
+- [filemanager_directory](resources/directory.md) - Manage directories
+- [filemanager_symlink](resources/symlink.md) - Manage symbolic links
+- [filemanager_copy](resources/copy.md) - Copy files and directories
+- [filemanager_archive](resources/archive.md) - Create and extract archives
+
+### Structured Files
+
+Read and write structured configuration files with validation and deep merge support.
+
+- [filemanager_json_file](resources/json_file.md) - Manage JSON files
+- [filemanager_yaml_file](resources/yaml_file.md) - Manage YAML files
+- [filemanager_toml_file](resources/toml_file.md) - Manage TOML files
+- [filemanager_hcl_file](resources/hcl_file.md) - Manage HCL files
+- [filemanager_xml_file](resources/xml_file.md) - Manage XML files
+- [filemanager_ini_file](resources/ini_file.md) - Manage INI files
+- [filemanager_env_file](resources/env_file.md) - Manage .env files
+
+### Templates
+
+Generate configuration files from templates.
+
+- [filemanager_template_file](resources/template_file.md) - Render Go templates
+- [filemanager_app_config](resources/app_config.md) - Generate application-specific configs
+
+### Remote Operations
+
+Transfer files between local and remote systems.
+
+- [filemanager_upload](resources/upload.md) - Upload files to remote backends
+- [filemanager_download](resources/download.md) - Download files from remote backends
+- [filemanager_sync](resources/sync.md) - Synchronize directories
+- [filemanager_transfer](resources/transfer.md) - Transfer between backends
+
+### Cloud Storage Operations
+
+Perform operations on cloud storage services.
+
+- [filemanager_s3_operation](resources/s3_operation.md) - S3 bucket operations
+- [filemanager_azure_operation](resources/azure_operation.md) - Azure Blob operations
+- [filemanager_gcs_operation](resources/gcs_operation.md) - Google Cloud Storage operations
+- [filemanager_b2_operation](resources/b2_operation.md) - Backblaze B2 operations
+
+### Backend Services
+
+Configure backend service connections.
+
+- [filemanager_ssh_service](resources/ssh_service.md) - SSH/SFTP connection
+- [filemanager_s3_service](resources/s3_service.md) - S3-compatible storage
+- [filemanager_azure_service](resources/azure_service.md) - Azure Blob Storage
+- [filemanager_gcs_service](resources/gcs_service.md) - Google Cloud Storage
+- [filemanager_b2_service](resources/b2_service.md) - Backblaze B2
+- [filemanager_ftp_service](resources/ftp_service.md) - FTP/FTPS connection
+- [filemanager_swift_service](resources/swift_service.md) - OpenStack Swift
+
+## Data Source Categories
+
+### File Information
+
+Read file content and metadata.
+
+- [filemanager_file](data-sources/file.md) - Read file content
+- [filemanager_files](data-sources/files.md) - List files matching patterns
+- [filemanager_directory](data-sources/directory.md) - Read directory contents
+- [filemanager_stat](data-sources/stat.md) - Get file metadata
+- [filemanager_checksum](data-sources/checksum.md) - Calculate file checksums
+- [filemanager_validate](data-sources/validate.md) - Validate file formats
+- [filemanager_compare](data-sources/compare.md) - Compare files
+
+### Structured File Reading
+
+Parse structured configuration files and access values.
+
+- [filemanager_json](data-sources/json.md) - Read and parse JSON files
+- [filemanager_yaml](data-sources/yaml.md) - Read and parse YAML files
+- [filemanager_toml](data-sources/toml.md) - Read and parse TOML files
+- [filemanager_hcl](data-sources/hcl.md) - Read and parse HCL files
+- [filemanager_xml](data-sources/xml.md) - Read and parse XML files
+- [filemanager_ini](data-sources/ini.md) - Read and parse INI files
+- [filemanager_env](data-sources/env.md) - Read and parse .env files
+
+## Guides
+
+- [Getting Started](guides/getting-started.md) - Installation and first steps
+- [Backend Configuration](guides/backends.md) - Configuring remote backends
+- [Structured Files](guides/structured-files.md) - Working with JSON, YAML, and other formats
+- [Atomic Operations](guides/atomic-operations.md) - Understanding ACID guarantees

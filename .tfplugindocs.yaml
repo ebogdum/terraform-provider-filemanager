@@ -1,0 +1,16 @@
+provider-name: "filemanager"
+rendered-provider-name: "FileManager"
+provider-dir: "."
+
+# Template locations
+website-source-dir: "templates"
+examples-dir: "examples"
+
+# Use custom templates
+templates-dir: "templates"
+
+# Render provider-level docs
+rendered-website-dir: "docs"
+
+# Include guides as static pages
+ignore-deprecated: true

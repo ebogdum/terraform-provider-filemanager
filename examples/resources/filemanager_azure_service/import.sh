@@ -1,0 +1,1 @@
+terraform import filemanager_azure_service.main azure-main

@@ -1,0 +1,1 @@
+terraform import filemanager_azure_operation.upload_config configs/app/config.json

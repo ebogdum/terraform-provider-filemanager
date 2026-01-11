@@ -1,0 +1,1 @@
+terraform import filemanager_s3_operation.upload_config configs/app/config.json
