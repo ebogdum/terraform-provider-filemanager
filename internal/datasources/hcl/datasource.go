@@ -287,7 +287,12 @@ func blockToMap(block *hclsyntax.Block) (map[string]any, error) {
 	result := make(map[string]any)
 
 	if len(block.Labels) > 0 {
-		result["__labels__"] = block.Labels
+		// Convert []string to []any for Terraform compatibility
+		labels := make([]any, len(block.Labels))
+		for i, l := range block.Labels {
+			labels[i] = l
+		}
+		result["__labels__"] = labels
 	}
 
 	for name, attr := range block.Body.Attributes {

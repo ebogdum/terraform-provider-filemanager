@@ -71,6 +71,14 @@ func goValueToAttrValue(ctx context.Context, value any) (attr.Value, diag.Diagno
 	case []any:
 		return goSliceToTerraformTuple(ctx, v)
 
+	case []string:
+		// Convert []string to []any for compatibility
+		anySlice := make([]any, len(v))
+		for i, s := range v {
+			anySlice[i] = s
+		}
+		return goSliceToTerraformTuple(ctx, anySlice)
+
 	case map[string]any:
 		return goMapToTerraformObject(ctx, v)
 
