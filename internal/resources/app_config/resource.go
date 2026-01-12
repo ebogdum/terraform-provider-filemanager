@@ -37,6 +37,7 @@ import (
 	"github.com/ebogdum/filemanager/internal/apps/postgresql"
 	"github.com/ebogdum/filemanager/internal/apps/prometheus"
 	"github.com/ebogdum/filemanager/internal/apps/redis"
+	"github.com/ebogdum/filemanager/internal/apps/ssh_client"
 	"github.com/ebogdum/filemanager/internal/apps/sshd"
 	"github.com/ebogdum/filemanager/internal/apps/systemd"
 	"github.com/ebogdum/filemanager/internal/apps/traefik"
@@ -70,6 +71,7 @@ func NewAppConfigResource() resource.Resource {
 			"envoy":         envoy.New(),
 			"elasticsearch": elasticsearch.New(),
 			"sshd":          sshd.New(),
+			"ssh_client":    ssh_client.New(),
 			"httpd":         httpd.New(),
 			"mysql":         mysql.New(),
 			"postgresql":    postgresql.New(),

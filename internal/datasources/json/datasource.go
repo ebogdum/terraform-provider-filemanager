@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/ebogdum/filemanager/internal/common"
+	jsonformat "github.com/ebogdum/filemanager/internal/formats/json"
 	"github.com/ebogdum/filemanager/internal/plugin"
 )
 
@@ -35,14 +36,16 @@ type JSONDataSource struct {
 
 // JSONDataSourceModel describes the data source data model.
 type JSONDataSourceModel struct {
-	ID      types.String  `tfsdk:"id"`
-	Path    types.String  `tfsdk:"path"`
-	Service types.String  `tfsdk:"service"`
-	Data    types.Dynamic `tfsdk:"data"`
-	Content types.String  `tfsdk:"content"`
-	Size    types.Int64   `tfsdk:"size"`
-	MD5     types.String  `tfsdk:"md5"`
-	SHA256  types.String  `tfsdk:"sha256"`
+	ID          types.String  `tfsdk:"id"`
+	Path        types.String  `tfsdk:"path"`
+	Service     types.String  `tfsdk:"service"`
+	Query       types.String  `tfsdk:"query"`
+	Data        types.Dynamic `tfsdk:"data"`
+	QueryResult types.Dynamic `tfsdk:"query_result"`
+	Content     types.String  `tfsdk:"content"`
+	Size        types.Int64   `tfsdk:"size"`
+	MD5         types.String  `tfsdk:"md5"`
+	SHA256      types.String  `tfsdk:"sha256"`
 }
 
 // Metadata returns the data source type name.
@@ -68,8 +71,16 @@ func (d *JSONDataSource) Schema(ctx context.Context, req datasource.SchemaReques
 				Description: "Service to use for file operations. Defaults to local filesystem.",
 				Optional:    true,
 			},
+			"query": schema.StringAttribute{
+				Description: "JSONPath query to extract specific data (e.g., '$.users[0].name', 'config.database.host').",
+				Optional:    true,
+			},
 			"data": schema.DynamicAttribute{
 				Description: "The parsed JSON content as a dynamic Terraform value. Access nested values using dot notation or bracket syntax.",
+				Computed:    true,
+			},
+			"query_result": schema.DynamicAttribute{
+				Description: "Result of the query if specified. Returns the extracted value as a dynamic type.",
 				Computed:    true,
 			},
 			"content": schema.StringAttribute{
@@ -173,6 +184,24 @@ func (d *JSONDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
+	// Handle query if specified
+	var queryResultVal types.Dynamic
+	if !data.Query.IsNull() && data.Query.ValueString() != "" {
+		format := jsonformat.New()
+		result, err := format.Query(parsed, data.Query.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Query failed", err.Error())
+			return
+		}
+		queryResultVal, diags = common.GoValueToTerraformDynamic(ctx, result)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	} else {
+		queryResultVal = types.DynamicNull()
+	}
+
 	// Calculate checksums
 	md5Hash := md5.Sum(content)
 	sha256Hash := sha256.Sum256(content)
@@ -180,6 +209,7 @@ func (d *JSONDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	// Set values
 	data.ID = data.Path
 	data.Data = dynamicVal
+	data.QueryResult = queryResultVal
 	data.Content = types.StringValue(string(content))
 	data.Size = types.Int64Value(int64(len(content)))
 	data.MD5 = types.StringValue(hex.EncodeToString(md5Hash[:]))

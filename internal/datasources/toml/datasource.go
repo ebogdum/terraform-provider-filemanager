@@ -17,6 +17,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/ebogdum/filemanager/internal/common"
+	tomlformat "github.com/ebogdum/filemanager/internal/formats/toml"
 	"github.com/ebogdum/filemanager/internal/plugin"
 )
 
@@ -35,14 +36,16 @@ type TOMLDataSource struct {
 
 // TOMLDataSourceModel describes the data source data model.
 type TOMLDataSourceModel struct {
-	ID      types.String  `tfsdk:"id"`
-	Path    types.String  `tfsdk:"path"`
-	Service types.String  `tfsdk:"service"`
-	Data    types.Dynamic `tfsdk:"data"`
-	Content types.String  `tfsdk:"content"`
-	Size    types.Int64   `tfsdk:"size"`
-	MD5     types.String  `tfsdk:"md5"`
-	SHA256  types.String  `tfsdk:"sha256"`
+	ID          types.String  `tfsdk:"id"`
+	Path        types.String  `tfsdk:"path"`
+	Service     types.String  `tfsdk:"service"`
+	Query       types.String  `tfsdk:"query"`
+	Data        types.Dynamic `tfsdk:"data"`
+	QueryResult types.Dynamic `tfsdk:"query_result"`
+	Content     types.String  `tfsdk:"content"`
+	Size        types.Int64   `tfsdk:"size"`
+	MD5         types.String  `tfsdk:"md5"`
+	SHA256      types.String  `tfsdk:"sha256"`
 }
 
 // Metadata returns the data source type name.
@@ -68,8 +71,16 @@ func (d *TOMLDataSource) Schema(ctx context.Context, req datasource.SchemaReques
 				Description: "Service to use for file operations. Defaults to local filesystem.",
 				Optional:    true,
 			},
+			"query": schema.StringAttribute{
+				Description: "Path query to extract specific data (e.g., 'database.host', 'servers[0].name').",
+				Optional:    true,
+			},
 			"data": schema.DynamicAttribute{
 				Description: "The parsed TOML content as a dynamic Terraform value. Access nested values using dot notation or bracket syntax.",
+				Computed:    true,
+			},
+			"query_result": schema.DynamicAttribute{
+				Description: "Result of the query if specified. Returns the extracted value as a dynamic type.",
 				Computed:    true,
 			},
 			"content": schema.StringAttribute{
@@ -173,6 +184,24 @@ func (d *TOMLDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
+	// Handle query if specified
+	var queryResultVal types.Dynamic
+	if !data.Query.IsNull() && data.Query.ValueString() != "" {
+		format := tomlformat.New()
+		result, err := format.Query(parsed, data.Query.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Query failed", err.Error())
+			return
+		}
+		queryResultVal, diags = common.GoValueToTerraformDynamic(ctx, result)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	} else {
+		queryResultVal = types.DynamicNull()
+	}
+
 	// Calculate checksums
 	md5Hash := md5.Sum(content)
 	sha256Hash := sha256.Sum256(content)
@@ -180,6 +209,7 @@ func (d *TOMLDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	// Set values
 	data.ID = data.Path
 	data.Data = dynamicVal
+	data.QueryResult = queryResultVal
 	data.Content = types.StringValue(string(content))
 	data.Size = types.Int64Value(int64(len(content)))
 	data.MD5 = types.StringValue(hex.EncodeToString(md5Hash[:]))

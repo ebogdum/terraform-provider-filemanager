@@ -27,11 +27,13 @@ import (
 	envDataSource "github.com/ebogdum/filemanager/internal/datasources/env"
 	fileDataSource "github.com/ebogdum/filemanager/internal/datasources/file"
 	filesDataSource "github.com/ebogdum/filemanager/internal/datasources/files"
+	groupsDataSource "github.com/ebogdum/filemanager/internal/datasources/groups"
 	hclDataSource "github.com/ebogdum/filemanager/internal/datasources/hcl"
 	iniDataSource "github.com/ebogdum/filemanager/internal/datasources/ini"
 	jsonDataSource "github.com/ebogdum/filemanager/internal/datasources/json"
 	statDataSource "github.com/ebogdum/filemanager/internal/datasources/stat"
 	tomlDataSource "github.com/ebogdum/filemanager/internal/datasources/toml"
+	usersDataSource "github.com/ebogdum/filemanager/internal/datasources/users"
 	validateDataSource "github.com/ebogdum/filemanager/internal/datasources/validate"
 	xmlDataSource "github.com/ebogdum/filemanager/internal/datasources/xml"
 	yamlDataSource "github.com/ebogdum/filemanager/internal/datasources/yaml"
@@ -326,6 +328,8 @@ func (p *FileManagerProvider) DataSources(ctx context.Context) []func() datasour
 		xmlDataSource.NewXMLDataSource,
 		hclDataSource.NewHCLDataSource,
 		envDataSource.NewENVDataSource,
+		usersDataSource.NewUsersDataSource,
+		groupsDataSource.NewGroupsDataSource,
 	}
 }
 

@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
+	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -634,15 +636,31 @@ func (r *FileResource) setOwnership(ctx context.Context, backend plugin.Backend,
 	uid := -1
 	gid := -1
 
+	// Numeric UID takes precedence
 	if !data.UID.IsNull() {
 		uid = int(data.UID.ValueInt64())
+	} else if !data.Owner.IsNull() && data.Owner.ValueString() != "" {
+		// Lookup by name
+		u, err := user.Lookup(data.Owner.ValueString())
+		if err != nil {
+			return fmt.Errorf("failed to lookup user %s: %w", data.Owner.ValueString(), err)
+		}
+		uidInt, _ := strconv.Atoi(u.Uid)
+		uid = uidInt
 	}
 
+	// Numeric GID takes precedence
 	if !data.GID.IsNull() {
 		gid = int(data.GID.ValueInt64())
+	} else if !data.Group.IsNull() && data.Group.ValueString() != "" {
+		// Lookup by name
+		g, err := user.LookupGroup(data.Group.ValueString())
+		if err != nil {
+			return fmt.Errorf("failed to lookup group %s: %w", data.Group.ValueString(), err)
+		}
+		gidInt, _ := strconv.Atoi(g.Gid)
+		gid = gidInt
 	}
-
-	// TODO: Resolve owner/group names to IDs if specified
 
 	if uid >= 0 || gid >= 0 {
 		if err := backend.Chown(ctx, path, uid, gid); err != nil {

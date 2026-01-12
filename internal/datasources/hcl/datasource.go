@@ -22,6 +22,7 @@ import (
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"github.com/ebogdum/filemanager/internal/common"
+	hclformat "github.com/ebogdum/filemanager/internal/formats/hcl"
 	"github.com/ebogdum/filemanager/internal/plugin"
 )
 
@@ -40,14 +41,16 @@ type HCLDataSource struct {
 
 // HCLDataSourceModel describes the data source data model.
 type HCLDataSourceModel struct {
-	ID      types.String  `tfsdk:"id"`
-	Path    types.String  `tfsdk:"path"`
-	Service types.String  `tfsdk:"service"`
-	Data    types.Dynamic `tfsdk:"data"`
-	Content types.String  `tfsdk:"content"`
-	Size    types.Int64   `tfsdk:"size"`
-	MD5     types.String  `tfsdk:"md5"`
-	SHA256  types.String  `tfsdk:"sha256"`
+	ID          types.String  `tfsdk:"id"`
+	Path        types.String  `tfsdk:"path"`
+	Service     types.String  `tfsdk:"service"`
+	Query       types.String  `tfsdk:"query"`
+	Data        types.Dynamic `tfsdk:"data"`
+	QueryResult types.Dynamic `tfsdk:"query_result"`
+	Content     types.String  `tfsdk:"content"`
+	Size        types.Int64   `tfsdk:"size"`
+	MD5         types.String  `tfsdk:"md5"`
+	SHA256      types.String  `tfsdk:"sha256"`
 }
 
 // Metadata returns the data source type name.
@@ -75,8 +78,16 @@ Reads an HCL (HashiCorp Configuration Language) file and returns its parsed cont
 				Description: "Service to use for file operations. Defaults to local filesystem.",
 				Optional:    true,
 			},
+			"query": schema.StringAttribute{
+				Description: "Path query to extract specific data (e.g., 'variable.name', 'resource.aws_instance.web').",
+				Optional:    true,
+			},
 			"data": schema.DynamicAttribute{
 				Description: "The parsed HCL content as a dynamic Terraform value.",
+				Computed:    true,
+			},
+			"query_result": schema.DynamicAttribute{
+				Description: "Result of the query if specified. Returns the extracted value as a dynamic type.",
 				Computed:    true,
 			},
 			"content": schema.StringAttribute{
@@ -188,6 +199,24 @@ func (d *HCLDataSource) Read(ctx context.Context, req datasource.ReadRequest, re
 		return
 	}
 
+	// Handle query if specified
+	var queryResultVal types.Dynamic
+	if !data.Query.IsNull() && data.Query.ValueString() != "" {
+		format := hclformat.New()
+		result, err := format.Query(parsed, data.Query.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Query failed", err.Error())
+			return
+		}
+		queryResultVal, convDiags = common.GoValueToTerraformDynamic(ctx, result)
+		resp.Diagnostics.Append(convDiags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	} else {
+		queryResultVal = types.DynamicNull()
+	}
+
 	// Calculate checksums
 	md5Hash := md5.Sum(content)
 	sha256Hash := sha256.Sum256(content)
@@ -195,6 +224,7 @@ func (d *HCLDataSource) Read(ctx context.Context, req datasource.ReadRequest, re
 	// Set values
 	data.ID = data.Path
 	data.Data = dynamicVal
+	data.QueryResult = queryResultVal
 	data.Content = types.StringValue(string(content))
 	data.Size = types.Int64Value(int64(len(content)))
 	data.MD5 = types.StringValue(hex.EncodeToString(md5Hash[:]))
