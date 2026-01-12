@@ -754,6 +754,30 @@ func (b *Backend) Capabilities() plugin.BackendCapabilities {
 	}
 }
 
+// Execute runs a command on the remote system and returns the output.
+// This implements the plugin.CommandExecutor interface.
+func (b *Backend) Execute(ctx context.Context, command string) ([]byte, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if !b.connected {
+		return nil, plugin.ErrNotConnected
+	}
+
+	session, err := b.sshClient.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SSH session: %w", err)
+	}
+	defer session.Close()
+
+	output, err := session.CombinedOutput(command)
+	if err != nil {
+		return output, fmt.Errorf("command failed: %w", err)
+	}
+
+	return output, nil
+}
+
 // CopyFile copies a file remotely (SFTP doesn't have native remote copy, so we stream).
 func (b *Backend) CopyFile(ctx context.Context, src, dst string, opts plugin.WriteOptions) error {
 	b.mu.RLock()

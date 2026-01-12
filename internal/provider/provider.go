@@ -25,6 +25,7 @@ import (
 	compareDataSource "github.com/ebogdum/filemanager/internal/datasources/compare"
 	directoryDataSource "github.com/ebogdum/filemanager/internal/datasources/directory"
 	envDataSource "github.com/ebogdum/filemanager/internal/datasources/env"
+	environmentDataSource "github.com/ebogdum/filemanager/internal/datasources/environment"
 	fileDataSource "github.com/ebogdum/filemanager/internal/datasources/file"
 	filesDataSource "github.com/ebogdum/filemanager/internal/datasources/files"
 	groupsDataSource "github.com/ebogdum/filemanager/internal/datasources/groups"
@@ -328,6 +329,7 @@ func (p *FileManagerProvider) DataSources(ctx context.Context) []func() datasour
 		xmlDataSource.NewXMLDataSource,
 		hclDataSource.NewHCLDataSource,
 		envDataSource.NewENVDataSource,
+		environmentDataSource.NewEnvironmentDataSource,
 		usersDataSource.NewUsersDataSource,
 		groupsDataSource.NewGroupsDataSource,
 	}

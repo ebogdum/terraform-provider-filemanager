@@ -161,6 +161,12 @@ type Unlocker interface {
 	Unlock() error
 }
 
+// CommandExecutor is an optional interface for backends that support command execution.
+// Backends like SSH can implement this to allow running remote commands.
+type CommandExecutor interface {
+	Execute(ctx context.Context, command string) ([]byte, error)
+}
+
 // FileInfo contains file metadata.
 type FileInfo struct {
 	Name    string
