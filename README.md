@@ -46,6 +46,7 @@ provider "filemanager" {
 | `filemanager_env_file` | Manage .env environment files |
 | `filemanager_xml_file` | Manage XML files |
 | `filemanager_hcl_file` | Manage HCL configuration files |
+| `filemanager_tfvars_file` | Manage Terraform .tfvars files with native types and interpolation |
 | `filemanager_template_file` | Render Go templates to files |
 | `filemanager_app_config` | Manage application-specific configs |
 | `filemanager_archive` | Create tar, tar.gz, and zip archives |
@@ -70,6 +71,7 @@ provider "filemanager" {
 | `filemanager_checksum` | Calculate file checksums |
 | `filemanager_validate` | Validate structured content |
 | `filemanager_compare` | Compare files or directories |
+| `filemanager_tfvars` | Read and parse Terraform .tfvars files |
 
 ## Functions
 
@@ -224,6 +226,17 @@ See the [examples](./examples) directory for comprehensive usage examples:
 - `25-azure-operation` - Azure operations
 - `26-gcs-operation` - GCS operations
 - `27-b2-operation` - B2 operations
+- `28-ftp-operation` - FTP operations
+- `29-swift-operation` - Swift operations
+- `30-json-data` - JSON data source
+- `31-yaml-data` - YAML data source
+- `32-toml-data` - TOML data source
+- `33-ini-data` - INI data source
+- `34-xml-data` - XML data source
+- `35-hcl-data` - HCL data source
+- `36-env-data` - ENV data source
+- `37-tfvars-file` - Terraform .tfvars file management
+- `38-tfvars-data` - Reading .tfvars files
 
 ## Building from Source
 
