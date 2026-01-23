@@ -5,7 +5,7 @@ A comprehensive Terraform provider for file and directory management with ACID g
 ## Features
 
 - **ACID Guarantees**: Atomic writes, file locking, checksum verification
-- **Multiple Backends**: Local filesystem, SSH/SFTP, S3, Azure Blob, GCS, Backblaze B2
+- **Multiple Backends**: Local filesystem, SSH/SFTP, FTP/FTPS, S3, Azure Blob, GCS, Backblaze B2, OpenStack Swift
 - **Structured Content**: JSON, YAML, TOML, INI, ENV, XML, HCL with deep merge and schema validation
 - **Template Rendering**: Go templates with custom delimiters
 - **Application Configs**: Native support for nginx, consul, prometheus, and other applications
@@ -59,6 +59,15 @@ provider "filemanager" {
 | `filemanager_azure_operation` | Azure Blob operations (metadata, tags, tier) |
 | `filemanager_gcs_operation` | GCS object operations (metadata, storage class) |
 | `filemanager_b2_operation` | Backblaze B2 operations |
+| `filemanager_s3_service` | Configure S3 backend service |
+| `filemanager_azure_service` | Configure Azure Blob backend service |
+| `filemanager_gcs_service` | Configure GCS backend service |
+| `filemanager_b2_service` | Configure Backblaze B2 backend service |
+| `filemanager_ssh_service` | Configure SSH/SFTP backend service |
+| `filemanager_ftp_service` | Configure FTP/FTPS backend service |
+| `filemanager_ftp_operation` | FTP file operations |
+| `filemanager_swift_service` | Configure OpenStack Swift backend service |
+| `filemanager_swift_operation` | Swift object operations |
 
 ## Data Sources
 
@@ -71,7 +80,17 @@ provider "filemanager" {
 | `filemanager_checksum` | Calculate file checksums |
 | `filemanager_validate` | Validate structured content |
 | `filemanager_compare` | Compare files or directories |
+| `filemanager_json` | Read and parse JSON files |
+| `filemanager_yaml` | Read and parse YAML files |
+| `filemanager_toml` | Read and parse TOML files |
+| `filemanager_ini` | Read and parse INI files |
+| `filemanager_xml` | Read and parse XML files |
+| `filemanager_hcl` | Read and parse HCL files |
 | `filemanager_tfvars` | Read and parse Terraform .tfvars files |
+| `filemanager_env` | Read and parse .env files |
+| `filemanager_environment` | Read environment variables |
+| `filemanager_users` | Query system users |
+| `filemanager_groups` | Query system groups |
 
 ## Functions
 
