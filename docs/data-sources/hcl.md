@@ -62,6 +62,7 @@ Reads an HCL (HashiCorp Configuration Language) file and returns its parsed cont
 
 ### Optional
 
+- `query` (String) Path query to extract specific data (e.g., 'variable.name', 'resource.aws_instance.web').
 - `service` (String) Service to use for file operations. Defaults to local filesystem.
 
 ### Read-Only
@@ -70,5 +71,6 @@ Reads an HCL (HashiCorp Configuration Language) file and returns its parsed cont
 - `data` (Dynamic) The parsed HCL content as a dynamic Terraform value.
 - `id` (String) Unique identifier for the data source.
 - `md5` (String) MD5 checksum of the file content.
+- `query_result` (Dynamic) Result of the query if specified. Returns the extracted value as a dynamic type.
 - `sha256` (String) SHA-256 checksum of the file content.
 - `size` (Number) Size of the file in bytes.

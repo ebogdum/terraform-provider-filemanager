@@ -60,6 +60,7 @@ Reads an XML file and returns its parsed content as a dynamic value representing
 
 ### Optional
 
+- `query` (String) XPath query to extract specific data (e.g., '//book/title', '/root/config/@attr').
 - `service` (String) Service to use for file operations. Defaults to local filesystem.
 
 ### Read-Only
@@ -68,5 +69,6 @@ Reads an XML file and returns its parsed content as a dynamic value representing
 - `data` (Dynamic) The parsed XML content as a dynamic Terraform value. Attributes are prefixed with '@', text content uses '#text'.
 - `id` (String) Unique identifier for the data source.
 - `md5` (String) MD5 checksum of the file content.
+- `query_result` (Dynamic) Result of the XPath query if specified. Returns the extracted value as a dynamic type.
 - `sha256` (String) SHA-256 checksum of the file content.
 - `size` (Number) Size of the file in bytes.

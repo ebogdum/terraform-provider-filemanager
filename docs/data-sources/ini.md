@@ -56,6 +56,7 @@ Reads an INI file and returns its parsed content as a dynamic value organized by
 
 ### Optional
 
+- `query` (String) Path query to extract specific data (e.g., 'section.key', 'database.host').
 - `service` (String) Service to use for file operations. Defaults to local filesystem.
 
 ### Read-Only
@@ -64,5 +65,6 @@ Reads an INI file and returns its parsed content as a dynamic value organized by
 - `data` (Dynamic) The parsed INI content as a dynamic Terraform value. Access values using section.key notation.
 - `id` (String) Unique identifier for the data source.
 - `md5` (String) MD5 checksum of the file content.
+- `query_result` (Dynamic) Result of the query if specified. Returns the extracted value as a dynamic type.
 - `sha256` (String) SHA-256 checksum of the file content.
 - `size` (Number) Size of the file in bytes.

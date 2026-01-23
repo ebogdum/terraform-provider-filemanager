@@ -64,6 +64,7 @@ Reads a .env file and returns its parsed content as a map of environment variabl
 
 ### Optional
 
+- `query` (String) Key name to extract a specific environment variable value.
 - `service` (String) Service to use for file operations. Defaults to local filesystem.
 
 ### Read-Only
@@ -72,5 +73,6 @@ Reads a .env file and returns its parsed content as a map of environment variabl
 - `data` (Dynamic) The parsed environment variables as key-value pairs. All values are strings.
 - `id` (String) Unique identifier for the data source.
 - `md5` (String) MD5 checksum of the file content.
+- `query_result` (Dynamic) Result of the query if specified. Returns the extracted value as a dynamic type.
 - `sha256` (String) SHA-256 checksum of the file content.
 - `size` (Number) Size of the file in bytes.
