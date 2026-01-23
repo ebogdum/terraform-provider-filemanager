@@ -51,6 +51,14 @@ signs:
 
 release:
   draft: true
+  header: |
+    ## terraform-provider-filemanager v{{ .Version }}
+
+    ### Highlights
+    - New `filemanager_tfvars_file` resource for managing Terraform variable files
+    - New `filemanager_tfvars` data source for reading tfvars files
+    - Native dynamic type support - pass complex values directly from other resources
+    - Internal variable interpolation with dependency resolution
 
 changelog:
   sort: asc

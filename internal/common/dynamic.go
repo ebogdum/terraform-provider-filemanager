@@ -14,6 +14,107 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
 
+// TerraformDynamicToGoValue converts a Terraform types.Dynamic value back to Go native types.
+func TerraformDynamicToGoValue(ctx context.Context, val types.Dynamic) (any, error) {
+	if val.IsNull() || val.IsUnknown() {
+		return nil, nil
+	}
+	return attrValueToGo(ctx, val.UnderlyingValue())
+}
+
+// attrValueToGo converts an attr.Value to a Go value.
+func attrValueToGo(ctx context.Context, val attr.Value) (any, error) {
+	if val == nil || val.IsNull() || val.IsUnknown() {
+		return nil, nil
+	}
+
+	switch v := val.(type) {
+	case basetypes.StringValue:
+		return v.ValueString(), nil
+
+	case basetypes.BoolValue:
+		return v.ValueBool(), nil
+
+	case basetypes.NumberValue:
+		bf := v.ValueBigFloat()
+		if bf == nil {
+			return nil, nil
+		}
+		if bf.IsInt() {
+			i, _ := bf.Int64()
+			return i, nil
+		}
+		f, _ := bf.Float64()
+		return f, nil
+
+	case basetypes.TupleValue:
+		elems := v.Elements()
+		result := make([]any, len(elems))
+		for i, elem := range elems {
+			goVal, err := attrValueToGo(ctx, elem)
+			if err != nil {
+				return nil, fmt.Errorf("tuple element %d: %w", i, err)
+			}
+			result[i] = goVal
+		}
+		return result, nil
+
+	case basetypes.ObjectValue:
+		attrs := v.Attributes()
+		result := make(map[string]any, len(attrs))
+		for k, attr := range attrs {
+			goVal, err := attrValueToGo(ctx, attr)
+			if err != nil {
+				return nil, fmt.Errorf("object key %q: %w", k, err)
+			}
+			result[k] = goVal
+		}
+		return result, nil
+
+	case basetypes.ListValue:
+		elems := v.Elements()
+		result := make([]any, len(elems))
+		for i, elem := range elems {
+			goVal, err := attrValueToGo(ctx, elem)
+			if err != nil {
+				return nil, fmt.Errorf("list element %d: %w", i, err)
+			}
+			result[i] = goVal
+		}
+		return result, nil
+
+	case basetypes.MapValue:
+		elems := v.Elements()
+		result := make(map[string]any, len(elems))
+		for k, elem := range elems {
+			goVal, err := attrValueToGo(ctx, elem)
+			if err != nil {
+				return nil, fmt.Errorf("map key %q: %w", k, err)
+			}
+			result[k] = goVal
+		}
+		return result, nil
+
+	case basetypes.SetValue:
+		elems := v.Elements()
+		result := make([]any, len(elems))
+		for i, elem := range elems {
+			goVal, err := attrValueToGo(ctx, elem)
+			if err != nil {
+				return nil, fmt.Errorf("set element %d: %w", i, err)
+			}
+			result[i] = goVal
+		}
+		return result, nil
+
+	case basetypes.DynamicValue:
+		return attrValueToGo(ctx, v.UnderlyingValue())
+
+	default:
+		return nil, fmt.Errorf("unsupported attr.Value type: %T", val)
+	}
+}
+
 // GoValueToTerraformDynamic converts a Go value (from JSON/YAML/etc parsing)
 // to a Terraform basetypes.DynamicValue that can be used in data source outputs.
 func GoValueToTerraformDynamic(ctx context.Context, value any) (basetypes.DynamicValue, diag.Diagnostics) {

@@ -33,6 +33,7 @@ import (
 	iniDataSource "github.com/ebogdum/filemanager/internal/datasources/ini"
 	jsonDataSource "github.com/ebogdum/filemanager/internal/datasources/json"
 	statDataSource "github.com/ebogdum/filemanager/internal/datasources/stat"
+	tfvarsDataSource "github.com/ebogdum/filemanager/internal/datasources/tfvars"
 	tomlDataSource "github.com/ebogdum/filemanager/internal/datasources/toml"
 	usersDataSource "github.com/ebogdum/filemanager/internal/datasources/users"
 	validateDataSource "github.com/ebogdum/filemanager/internal/datasources/validate"
@@ -67,6 +68,7 @@ import (
 	symlinkResource "github.com/ebogdum/filemanager/internal/resources/symlink"
 	syncResource "github.com/ebogdum/filemanager/internal/resources/sync"
 	templateFileResource "github.com/ebogdum/filemanager/internal/resources/template_file"
+	tfvarsFileResource "github.com/ebogdum/filemanager/internal/resources/tfvars_file"
 	tomlFileResource "github.com/ebogdum/filemanager/internal/resources/toml_file"
 	transferResource "github.com/ebogdum/filemanager/internal/resources/transfer"
 	uploadResource "github.com/ebogdum/filemanager/internal/resources/upload"
@@ -287,6 +289,7 @@ func (p *FileManagerProvider) Resources(ctx context.Context) []func() resource.R
 		xmlFileResource.NewXMLFileResource,
 		hclFileResource.NewHCLFileResource,
 		templateFileResource.NewTemplateFileResource,
+		tfvarsFileResource.NewTfvarsFileResource,
 		appConfigResource.NewAppConfigResource,
 		directoryResource.NewDirectoryResource,
 		symlinkResource.NewSymlinkResource,
@@ -328,6 +331,7 @@ func (p *FileManagerProvider) DataSources(ctx context.Context) []func() datasour
 		iniDataSource.NewINIDataSource,
 		xmlDataSource.NewXMLDataSource,
 		hclDataSource.NewHCLDataSource,
+		tfvarsDataSource.NewTfvarsDataSource,
 		envDataSource.NewENVDataSource,
 		environmentDataSource.NewEnvironmentDataSource,
 		usersDataSource.NewUsersDataSource,

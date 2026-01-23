@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-01-23
+
+### Added
+
+#### Resources
+- `filemanager_tfvars_file` - Manage Terraform `.tfvars` files with native type support
+  - Native dynamic types: pass maps, lists, numbers, booleans directly
+  - Internal interpolation: self-referencing variables via `{{ .var_name }}` syntax
+  - External interpolation: use outputs from other Terraform resources/data sources
+  - Variable-level operations: set/delete individual variables
+  - Merge with existing files: preserve unmanaged variables
+  - Dual format output: HCL (`.tfvars`) or JSON (`.tfvars.json`)
+  - Template functions: upper, lower, trim, replace, split, join, default, env
+  - Topological dependency resolution for interpolation order
+  - Deep interpolation: template references resolved in nested maps and lists
+
+#### Data Sources
+- `filemanager_tfvars` - Read and parse Terraform `.tfvars` files
+  - Auto-detects HCL vs JSON format by file extension
+  - Returns all variables as native Terraform dynamic types
+  - Query support: extract specific variables by name
+  - Reports variable names list and count
+  - Supports all backends (local, SSH, S3, Azure, GCS, etc.)
+
+#### Internal
+- `common.TerraformDynamicToGoValue()` - Reverse conversion from Terraform dynamic types to Go native values
+
 ## [1.0.0] - 2026-01-11
 
 ### Added
