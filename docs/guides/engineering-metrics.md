@@ -11,7 +11,7 @@ This project includes a metrics CLI to baseline and track code quality, complexi
 GOCACHE=$(pwd)/.cache/go-build go test ./... -coverprofile=coverage.out
 
 # 2) Generate metrics JSON
-GOCACHE=$(pwd)/.cache/go-build go run ./tools/quality_metrics.go -root . -coverage-file ./coverage.out > metrics.json
+GOCACHE=$(pwd)/.cache/go-build go run ./tools/quality_metrics.go -root . -coverage-file ./coverage.out -top-hotspots 25 > metrics.json
 ```
 
 ## Metric Coverage
@@ -26,6 +26,7 @@ The generated JSON includes the following metrics families:
 - Quality and Risk: Technical Debt (proxy), Duplication Percentage (sliding-window proxy), Documentation Threshold/Coverage
 - Testing and Change: Code Coverage, Change Instability (git-window based)
 - Coupling and Flow: Afferent Coupling, Efferent Coupling, Fan-in, Fan-out
+- Hotspots: Top complexity functions with ID/package/name for prioritization
 
 ## Notes
 
@@ -33,3 +34,4 @@ The generated JSON includes the following metrics families:
 - Essential and pathological complexity are heuristic proxies derived from control-flow and nesting.
 - CBO/LCOM/RFC are static AST approximations and can undercount runtime or reflection-driven behavior.
 - Duplication uses normalized multi-line windows and is intended for trend tracking, not exact clone detection.
+- `coverage.available` and `change.available` indicate whether those metric families were successfully computed in the current environment.

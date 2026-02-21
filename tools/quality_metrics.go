@@ -88,6 +88,7 @@ type duplicationMetrics struct {
 }
 
 type coverageMetrics struct {
+	Available         bool    `json:"available"`
 	TotalStatements   int     `json:"total_statements"`
 	CoveredStatements int     `json:"covered_statements"`
 	CodeCoverage      float64 `json:"code_coverage_percent"`
@@ -101,6 +102,7 @@ type debtMetrics struct {
 }
 
 type changeMetrics struct {
+	Available             bool    `json:"available"`
 	Window                string  `json:"window"`
 	ChangedFiles          int     `json:"changed_files"`
 	TotalFiles            int     `json:"total_files"`
@@ -134,7 +136,19 @@ type report struct {
 	Coverage    coverageMetrics    `json:"coverage"`
 	Debt        debtMetrics        `json:"technical_debt"`
 	Change      changeMetrics      `json:"change"`
+	Hotspots    []hotspot          `json:"hotspots"`
 	Notes       []string           `json:"notes"`
+}
+
+type hotspot struct {
+	ID         string  `json:"id"`
+	Package    string  `json:"package"`
+	Name       string  `json:"name"`
+	Cyclomatic int     `json:"cyclomatic"`
+	Cognitive  int     `json:"cognitive"`
+	Nesting    int     `json:"nesting"`
+	Essential  int     `json:"essential"`
+	Pathologic float64 `json:"pathological_proxy"`
 }
 
 type classMetric struct {
@@ -181,6 +195,7 @@ func main() {
 	docThreshold := flag.Float64("doc-threshold", 80.0, "documentation coverage threshold percent")
 	dupWindow := flag.Int("dup-window", 6, "duplication sliding window size")
 	changeWindow := flag.String("change-window", "90.days", "git log window for change instability")
+	topHotspots := flag.Int("top-hotspots", 25, "number of complexity hotspots to include in report")
 	flag.Parse()
 
 	root, err := filepath.Abs(*rootFlag)
@@ -209,12 +224,12 @@ func main() {
 	functionNameIndex := make(map[string][]string)
 	classes := make(map[string]*classMetric)
 	pkgImports := make(map[string]map[string]struct{})
-	pkgFiles := make(map[string]int)
 
 	exportedSymbols := 0
 	documentedExportedSymbols := 0
 
 	dupByFile := make(map[string][]string)
+	fileMIVals := make([]float64, 0, len(files))
 
 	for _, path := range files {
 		relDir := filepath.Dir(strings.TrimPrefix(path, root+string(filepath.Separator)))
@@ -222,8 +237,6 @@ func main() {
 			relDir = ""
 		}
 		pkgImportPath := packageImportPath(modulePath, relDir)
-		pkgFiles[pkgImportPath]++
-
 		src, err := os.ReadFile(path)
 		if err != nil {
 			fail(err)
@@ -242,6 +255,10 @@ func main() {
 		if err != nil {
 			continue
 		}
+		fileComplexityTotal := 0
+		fileOps := make(map[string]int)
+		fileOperands := make(map[string]int)
+		analyzeHalstead(path, src, fileOps, fileOperands)
 
 		if _, ok := pkgImports[pkgImportPath]; !ok {
 			pkgImports[pkgImportPath] = make(map[string]struct{})
@@ -289,6 +306,7 @@ func main() {
 					calls:     calls,
 				}
 				functionNameIndex[fnName] = append(functionNameIndex[fnName], fnID)
+				fileComplexityTotal += complex
 
 				if recvType != "" {
 					classKey := pkgImportPath + "." + recvType
@@ -347,6 +365,8 @@ func main() {
 				}
 			}
 		}
+		fileHal := buildHalstead(fileOps, fileOperands)
+		fileMIVals = append(fileMIVals, maintainabilityIndex(fileHal.Volume, float64(fileComplexityTotal), float64(maxInt(1, sloc))))
 	}
 
 	line.CommentDensity = percent(float64(line.CommentLines), float64(maxInt(1, line.LOC)))
@@ -377,7 +397,8 @@ func main() {
 		}
 
 		for call := range fn.calls {
-			if targets, ok := functionNameIndex[call]; ok {
+			shortCall := shortCallName(call)
+			if targets, ok := functionNameIndex[shortCall]; ok {
 				if len(targets) == 1 {
 					fanIn[targets[0]]++
 					continue
@@ -397,9 +418,9 @@ func main() {
 	}
 
 	hal := buildHalstead(operators, operands)
-	mi := maintainabilityIndex(hal.Volume, sumFloat64(complexVals), float64(maxInt(1, line.SLOC)))
+	mi := calcDistribution(fileMIVals).Mean
 
-	wmcVals, ditVals, nocVals, cboVals, lcomVals, rfcVals := computeOOMetrics(classes)
+	wmcVals, ditVals, nocVals, cboVals, lcomVals, rfcVals := computeOOMetrics(classes, pkgImports)
 
 	caVals, ceVals, instVals := computeCoupling(pkgImports, modulePath)
 
@@ -462,6 +483,7 @@ func main() {
 		Coverage:    coverage,
 		Debt:        debt,
 		Change:      change,
+		Hotspots:    buildHotspots(functions, *topHotspots),
 		Notes: []string{
 			"Essential complexity and pathological complexity are proxy metrics derived from control-flow/nesting heuristics.",
 			"DIT/NOC are approximated from Go struct embedding relationships (Go has no classical inheritance).",
@@ -477,6 +499,14 @@ func main() {
 	if err := enc.Encode(rep); err != nil {
 		fail(err)
 	}
+}
+
+func shortCallName(call string) string {
+	idx := strings.LastIndex(call, ".")
+	if idx == -1 || idx == len(call)-1 {
+		return call
+	}
+	return call[idx+1:]
 }
 
 func discoverGoFiles(root string, includeTests bool) ([]string, error) {
@@ -813,7 +843,11 @@ func callName(fun ast.Expr) string {
 	case *ast.Ident:
 		return v.Name
 	case *ast.SelectorExpr:
-		return v.Sel.Name
+		prefix := exprName(v.X)
+		if prefix == "" {
+			return v.Sel.Name
+		}
+		return prefix + "." + v.Sel.Name
 	default:
 		return ""
 	}
@@ -837,7 +871,7 @@ func ensureClass(classes map[string]*classMetric, key, pkg, name string) *classM
 	return c
 }
 
-func computeOOMetrics(classes map[string]*classMetric) (wmcVals, ditVals, nocVals, cboVals, lcomVals, rfcVals []float64) {
+func computeOOMetrics(classes map[string]*classMetric, pkgImports map[string]map[string]struct{}) (wmcVals, ditVals, nocVals, cboVals, lcomVals, rfcVals []float64) {
 	children := make(map[string]int)
 	for _, c := range classes {
 		for _, emb := range c.embedded {
@@ -858,7 +892,7 @@ func computeOOMetrics(classes map[string]*classMetric) (wmcVals, ditVals, nocVal
 		}
 		maxDepth := 0
 		for _, emb := range c.embedded {
-			d := 1 + ditDepth(c.pkg+"."+emb, seen)
+			d := 1 + ditDepth(c.pkg+"."+emb, cloneStringSet(seen))
 			if d > maxDepth {
 				maxDepth = d
 			}
@@ -902,7 +936,7 @@ func computeOOMetrics(classes map[string]*classMetric) (wmcVals, ditVals, nocVal
 
 		d := ditDepth(key, map[string]struct{}{})
 		noc := children[key]
-		cbo := len(c.cboSet)
+		cbo := packageCoupling(pkgImports, c.pkg)
 		rfc := len(rfcSet)
 
 		wmcVals = append(wmcVals, float64(wmc))
@@ -913,6 +947,21 @@ func computeOOMetrics(classes map[string]*classMetric) (wmcVals, ditVals, nocVal
 		rfcVals = append(rfcVals, float64(rfc))
 	}
 	return
+}
+
+func packageCoupling(pkgImports map[string]map[string]struct{}, pkg string) int {
+	imports, ok := pkgImports[pkg]
+	if !ok {
+		return 0
+	}
+	set := make(map[string]struct{}, len(imports))
+	for imp := range imports {
+		if imp == pkg {
+			continue
+		}
+		set[imp] = struct{}{}
+	}
+	return len(set)
 }
 
 func computeCoupling(pkgImports map[string]map[string]struct{}, modulePath string) (caVals, ceVals, instVals []float64) {
@@ -1021,6 +1070,7 @@ func parseCoverage(path string) coverageMetrics {
 		}
 	}
 	return coverageMetrics{
+		Available:         true,
 		TotalStatements:   total,
 		CoveredStatements: covered,
 		CodeCoverage:      percent(float64(covered), float64(maxInt(1, total))),
@@ -1044,6 +1094,7 @@ func computeChangeMetrics(root string, files []string, window string) changeMetr
 	if err != nil {
 		return m
 	}
+	m.Available = true
 
 	fileSet := make(map[string]struct{})
 	pkgCount := make(map[string]int)
@@ -1102,6 +1153,44 @@ func calcDistribution(values []float64) distribution {
 		P95:   round2(values[idx]),
 		Max:   round2(values[len(values)-1]),
 	}
+}
+
+func buildHotspots(functions map[string]*functionMetric, limit int) []hotspot {
+	if limit <= 0 || len(functions) == 0 {
+		return nil
+	}
+
+	items := make([]hotspot, 0, len(functions))
+	for _, fn := range functions {
+		items = append(items, hotspot{
+			ID:         fn.id,
+			Package:    fn.pkg,
+			Name:       fn.name,
+			Cyclomatic: fn.complex,
+			Cognitive:  fn.cognitive,
+			Nesting:    fn.nesting,
+			Essential:  fn.essential,
+			Pathologic: round2(fn.patho),
+		})
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Cognitive != items[j].Cognitive {
+			return items[i].Cognitive > items[j].Cognitive
+		}
+		if items[i].Cyclomatic != items[j].Cyclomatic {
+			return items[i].Cyclomatic > items[j].Cyclomatic
+		}
+		if items[i].Nesting != items[j].Nesting {
+			return items[i].Nesting > items[j].Nesting
+		}
+		return items[i].ID < items[j].ID
+	})
+
+	if limit > len(items) {
+		limit = len(items)
+	}
+	return items[:limit]
 }
 
 func maintainabilityIndex(halsteadVolume, cyclomaticTotal, sloc float64) float64 {
@@ -1189,6 +1278,14 @@ func maxInt(a, b int) int {
 
 func round2(v float64) float64 {
 	return math.Round(v*100) / 100
+}
+
+func cloneStringSet(src map[string]struct{}) map[string]struct{} {
+	dst := make(map[string]struct{}, len(src))
+	for k := range src {
+		dst[k] = struct{}{}
+	}
+	return dst
 }
 
 func fail(err error) {
