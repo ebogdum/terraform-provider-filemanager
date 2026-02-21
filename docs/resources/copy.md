@@ -86,7 +86,7 @@ Copies files or directories from source to destination.
 - `filename` (String) The base name of the file.
 - `files_copied` (Number) Number of files copied.
 - `id` (String) Unique identifier for the resource.
-- `md5` (String) MD5 checksum of the destination (for single file copy).
+- `md5` (String) Deprecated insecure checksum field. Always null.
 - `sha256` (String) SHA-256 checksum of the destination (for single file copy).
 
 ## Import

@@ -64,7 +64,7 @@ Reads an INI file and returns its parsed content as a dynamic value organized by
 - `content` (String, Sensitive) The raw file content as a string.
 - `data` (Dynamic) The parsed INI content as a dynamic Terraform value. Access values using section.key notation.
 - `id` (String) Unique identifier for the data source.
-- `md5` (String) MD5 checksum of the file content.
+- `md5` (String) Deprecated insecure checksum field. Always null.
 - `query_result` (Dynamic) Result of the query if specified. Returns the extracted value as a dynamic type.
 - `sha256` (String) SHA-256 checksum of the file content.
 - `size` (Number) Size of the file in bytes.

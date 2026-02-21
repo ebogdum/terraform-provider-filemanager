@@ -68,7 +68,7 @@ Reads an XML file and returns its parsed content as a dynamic value representing
 - `content` (String, Sensitive) The raw file content as a string.
 - `data` (Dynamic) The parsed XML content as a dynamic Terraform value. Attributes are prefixed with '@', text content uses '#text'.
 - `id` (String) Unique identifier for the data source.
-- `md5` (String) MD5 checksum of the file content.
+- `md5` (String) Deprecated insecure checksum field. Always null.
 - `query_result` (Dynamic) Result of the XPath query if specified. Returns the extracted value as a dynamic type.
 - `sha256` (String) SHA-256 checksum of the file content.
 - `size` (Number) Size of the file in bytes.

@@ -49,7 +49,7 @@ Calculates the checksum of a file using the specified algorithm.
 
 ### Optional
 
-- `algorithm` (String) Checksum algorithm: md5, sha1, sha256, sha512.
+- `algorithm` (String) Checksum algorithm: sha256, sha512.
 - `service` (String) Service to use for file operations. Defaults to local filesystem.
 
 ### Read-Only

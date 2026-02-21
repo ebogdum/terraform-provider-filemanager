@@ -68,7 +68,7 @@ Configures an SSH/SFTP service for remote file operations via SFTP.
 ### Optional
 
 - `base_path` (String) Base path prefix for all operations.
-- `insecure_skip_host_key` (Boolean) Skip host key verification. WARNING: This is insecure and should only be used for testing.
+- `insecure_skip_host_key` (Boolean) Deprecated insecure option. Setting this to true is rejected for security reasons.
 - `known_hosts_file` (String) Path to known_hosts file for host key verification. Defaults to ~/.ssh/known_hosts.
 - `passphrase` (String, Sensitive) Passphrase for encrypted private key.
 - `passphrase_file` (String) Path to file containing passphrase for encrypted private key.

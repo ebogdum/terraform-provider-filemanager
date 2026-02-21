@@ -79,7 +79,7 @@ Creates an archive file from a source directory or list of files.
 - `file_count` (Number) Number of files in the archive.
 - `filename` (String) The base name of the file.
 - `id` (String) Unique identifier for the resource.
-- `md5` (String) MD5 checksum of the archive.
+- `md5` (String) Deprecated insecure checksum field. Always null.
 - `sha256` (String) SHA-256 checksum of the archive.
 - `size` (Number) Size of the archive in bytes.
 

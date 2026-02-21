@@ -156,7 +156,7 @@ The following functions are available in templates:
 - `extension` (String) The file extension without the leading dot (e.g., 'conf').
 - `filename` (String) The base name of the file (e.g., 'config.conf').
 - `id` (String) Unique identifier for the resource.
-- `md5` (String) MD5 checksum of the rendered content.
+- `md5` (String) Deprecated insecure checksum field. Always null.
 - `rendered_content` (String) The rendered template content.
 - `sha256` (String) SHA-256 checksum of the rendered content.
 - `sha512` (String) SHA-512 checksum of the rendered content.

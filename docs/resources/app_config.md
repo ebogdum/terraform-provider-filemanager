@@ -117,7 +117,7 @@ Supported applications:
 - `extension` (String) The file extension without the leading dot (e.g., 'conf').
 - `filename` (String) The base name of the file (e.g., 'config.conf').
 - `id` (String) Unique identifier for the resource.
-- `md5` (String) MD5 checksum of the file content.
+- `md5` (String) Deprecated insecure checksum field. Always null.
 - `rendered` (String) The rendered configuration content in native format.
 - `sha256` (String) SHA-256 checksum of the file content.
 - `size` (Number) Size of the file in bytes.

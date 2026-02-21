@@ -58,7 +58,7 @@ Reads a file from the local filesystem or a configured backend and returns its c
 - `content_base64` (String) The content of the file as base64 encoded string.
 - `id` (String) Unique identifier for the data source.
 - `is_dir` (Boolean) Whether the path is a directory.
-- `md5` (String) MD5 checksum of the file content.
+- `md5` (String) Deprecated insecure checksum field. Always null.
 - `mod_time` (String) File modification time in RFC3339 format.
 - `mode` (String) File permission mode in octal format.
 - `sha256` (String) SHA-256 checksum of the file content.

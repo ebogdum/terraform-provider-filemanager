@@ -104,7 +104,7 @@ Content should be provided as JSON (use jsonencode()) with the following convent
 - `extension` (String) The file extension without the leading dot (e.g., 'json').
 - `filename` (String) The base name of the file (e.g., 'config.json').
 - `id` (String) Unique identifier for the resource.
-- `md5` (String) MD5 checksum of the file content.
+- `md5` (String) Deprecated insecure checksum field. Always null.
 - `rendered` (String, Sensitive) The rendered XML content as a string.
 - `sha256` (String) SHA-256 checksum of the file content.
 - `size` (Number) Size of the file in bytes.

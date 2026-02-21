@@ -114,7 +114,7 @@ Blocks are represented as nested objects. Block labels can be specified using a 
 - `extension` (String) The file extension without the leading dot (e.g., 'json').
 - `filename` (String) The base name of the file (e.g., 'config.json').
 - `id` (String) Unique identifier for the resource.
-- `md5` (String) MD5 checksum of the file content.
+- `md5` (String) Deprecated insecure checksum field. Always null.
 - `rendered` (String, Sensitive) The rendered HCL content as a string.
 - `sha256` (String) SHA-256 checksum of the file content.
 - `size` (Number) Size of the file in bytes.

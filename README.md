@@ -272,6 +272,19 @@ mkdir -p ~/.terraform.d/plugins/ebogdum/filemanager/1.0.0/$(go env GOOS)_$(go en
 mv terraform-provider-filemanager ~/.terraform.d/plugins/ebogdum/filemanager/1.0.0/$(go env GOOS)_$(go env GOARCH)/
 ```
 
+## Local Git Hooks
+
+Install repository-managed hooks:
+
+```bash
+./tools/install-git-hooks.sh
+```
+
+Installed hooks:
+
+- `pre-commit`: Regenerates docs with `tfplugindocs` and blocks commits if `docs/` changes are not staged.
+- `pre-push` (tags only): Mirrors `.github/workflows/test.yml` checks (`go mod download`, `go build`, `go vet`, `go test`, docs freshness) and runs `goreleaser check` from `.github/workflows/release.yml`.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.

@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+CHECK_SCRIPT="$ROOT_DIR/tools/check-workflows.sh"
+ZERO_SHA="0000000000000000000000000000000000000000"
+TAG_PUSH_DETECTED=0
+TAG_SHAS=()
+
+contains_sha() {
+  local needle="$1"
+  local value
+  for value in "${TAG_SHAS[@]}"; do
+    if [[ "$value" == "$needle" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [[ "$local_ref" == refs/tags/* ]] && [[ "$local_sha" != "$ZERO_SHA" ]]; then
+    TAG_PUSH_DETECTED=1
+    if ! contains_sha "$local_sha"; then
+      TAG_SHAS+=("$local_sha")
+    fi
+  fi
+done
+
+if [[ "$TAG_PUSH_DETECTED" -eq 0 ]]; then
+  exit 0
+fi
+
+echo "[pre-push] Tag push detected. Running local workflow checks..."
+
+for sha in "${TAG_SHAS[@]}"; do
+  worktree_dir="$(mktemp -d "${TMPDIR:-/tmp}/filemanager-tag-check.XXXXXX")"
+
+  git -C "$ROOT_DIR" worktree add --detach "$worktree_dir" "$sha" >/dev/null
+
+  if (
+    cd "$worktree_dir"
+    "$CHECK_SCRIPT"
+  ); then
+    status=0
+  else
+    status=$?
+  fi
+  git -C "$ROOT_DIR" worktree remove --force "$worktree_dir" >/dev/null 2>&1 || true
+
+  if [[ "$status" -ne 0 ]]; then
+    echo "[pre-push] Tag push blocked because local workflow checks failed."
+    exit "$status"
+  fi
+done
+
+echo "[pre-push] Tag workflow checks passed."

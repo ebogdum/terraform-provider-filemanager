@@ -66,7 +66,7 @@ Downloads files or directories from a remote backend to local or another backend
 - `destination_backend` (String) Destination backend alias. Defaults to 'local'.
 - `directory_permission` (String) Directory permission mode in octal format (e.g., '0755').
 - `excludes` (List of String) Glob patterns to exclude from the download.
-- `expected_checksum` (String) Expected checksum for verification (format: algorithm:hash, e.g., sha256:abc123...).
+- `expected_checksum` (String) Expected checksum for verification (format: algorithm:hash, supported algorithm: sha256).
 - `file_permission` (String) File permission mode in octal format (e.g., '0644').
 - `includes` (List of String) Glob patterns to include in the download.
 - `overwrite` (Boolean) Overwrite existing files at destination.
@@ -84,7 +84,7 @@ Downloads files or directories from a remote backend to local or another backend
 - `filename` (String) The base name of the file.
 - `files_transferred` (Number) Number of files transferred.
 - `id` (String) Unique identifier for the resource.
-- `md5` (String) MD5 checksum of the downloaded file (for single file download).
+- `md5` (String) Deprecated insecure checksum field. Always null.
 - `sha256` (String) SHA-256 checksum of the downloaded file (for single file download).
 
 ## Import

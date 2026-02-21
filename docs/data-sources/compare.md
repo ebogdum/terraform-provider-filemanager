@@ -19,7 +19,7 @@ Compares two files for equality across multiple dimensions including content, ch
 
 ### Optional
 
-- `checksum_algorithm` (String) Checksum algorithm: md5, sha1, sha256, sha512. Defaults to sha256.
+- `checksum_algorithm` (String) Checksum algorithm: sha256, sha512. Defaults to sha256.
 - `compare_checksum` (Boolean) Compare file checksums. Defaults to true.
 - `compare_content` (Boolean) Compare file content byte-by-byte. Defaults to true.
 - `compare_mode` (Boolean) Compare file permissions. Defaults to true.
