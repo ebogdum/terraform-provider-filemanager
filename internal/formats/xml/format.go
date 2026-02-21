@@ -401,7 +401,9 @@ func serializeMapElement(w io.Writer, name string, m map[string]any, currentInde
 // escapeXML escapes special characters in XML text content.
 func escapeXML(s string) string {
 	var buf bytes.Buffer
-	xml.EscapeText(&buf, []byte(s))
+	if err := xml.EscapeText(&buf, []byte(s)); err != nil {
+		return s
+	}
 	return buf.String()
 }
 

@@ -23,7 +23,11 @@ func TestFileLocker_Lock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lock failed: %v", err)
 	}
-	defer lock.Unlock()
+	defer func() {
+		if err := lock.Unlock(); err != nil {
+			t.Fatalf("Unlock failed: %v", err)
+		}
+	}()
 
 	if lock.Path() != path {
 		t.Errorf("Path mismatch: got %q, want %q", lock.Path(), path)
@@ -52,7 +56,11 @@ func TestFileLocker_TryLock(t *testing.T) {
 		t.Fatal("Expected lock to be acquired")
 	}
 
-	defer lock.Unlock()
+	defer func() {
+		if err := lock.Unlock(); err != nil {
+			t.Fatalf("Unlock failed: %v", err)
+		}
+	}()
 }
 
 func TestFileLocker_SharedLock(t *testing.T) {
@@ -69,7 +77,11 @@ func TestFileLocker_SharedLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lock failed: %v", err)
 	}
-	defer lock.Unlock()
+	defer func() {
+		if err := lock.Unlock(); err != nil {
+			t.Fatalf("Unlock failed: %v", err)
+		}
+	}()
 
 	if lock.IsExclusive() {
 		t.Error("Expected shared lock")
@@ -91,7 +103,11 @@ func TestFileLocker_Timeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("First lock failed: %v", err)
 	}
-	defer lock1.Unlock()
+	defer func() {
+		if err := lock1.Unlock(); err != nil {
+			t.Fatalf("Unlock failed: %v", err)
+		}
+	}()
 
 	// Try to acquire second lock with short timeout
 	opts.Timeout = 100 * time.Millisecond
@@ -129,7 +145,11 @@ func TestFileLocker_Concurrent(t *testing.T) {
 				t.Errorf("Lock failed: %v", err)
 				return
 			}
-			defer lock.Unlock()
+			defer func() {
+				if err := lock.Unlock(); err != nil {
+					t.Errorf("Unlock failed: %v", err)
+				}
+			}()
 
 			// Critical section
 			counter++
@@ -162,4 +182,26 @@ func TestWithLock(t *testing.T) {
 	if !executed {
 		t.Error("Expected function to be executed")
 	}
+}
+
+func TestFileLocker_LockWithZeroRetryInterval(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.lock")
+
+	locker := NewFileLocker()
+	opts := DefaultLockOptions()
+	opts.Timeout = time.Second
+	opts.RetryInterval = 0
+
+	lock, err := locker.Lock(context.Background(), path, opts)
+	if err != nil {
+		t.Fatalf("Lock failed: %v", err)
+	}
+	defer func() {
+		if err := lock.Unlock(); err != nil {
+			t.Fatalf("Unlock failed: %v", err)
+		}
+	}()
 }

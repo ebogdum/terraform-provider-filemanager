@@ -6,6 +6,8 @@ package traefik
 import (
 	"fmt"
 	"net"
+	"net/mail"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,6 +27,12 @@ func New() *Plugin {
 
 // Ensure Plugin implements plugin.AppPlugin.
 var _ plugin.AppPlugin = (*Plugin)(nil)
+
+var (
+	durationPattern      = regexp.MustCompile(`^\d+(\.\d+)?(ns|us|µs|ms|s|m|h)?$`)
+	k8sNamespacePattern  = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	standardEmailPattern = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+)
 
 // Name returns the plugin name.
 func (p *Plugin) Name() string {
@@ -718,29 +726,33 @@ func parsePort(address string) (int, error) {
 }
 
 func isValidDuration(d string) bool {
-	// Simple duration validation
-	pattern := regexp.MustCompile(`^\d+(\.\d+)?(ns|us|µs|ms|s|m|h)?$`)
-	return pattern.MatchString(d)
+	return durationPattern.MatchString(d)
 }
 
 func isValidDockerEndpoint(endpoint string) bool {
-	// Valid formats: unix:///var/run/docker.sock, tcp://host:port
-	if strings.HasPrefix(endpoint, "unix://") {
-		return true
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return false
 	}
-	if strings.HasPrefix(endpoint, "tcp://") {
-		return true
+
+	switch parsed.Scheme {
+	case "unix":
+		return parsed.Path != ""
+	case "tcp":
+		if parsed.Host == "" {
+			return false
+		}
+		_, _, err := net.SplitHostPort(parsed.Host)
+		return err == nil
+	case "http", "https":
+		return parsed.Host != ""
+	default:
+		return false
 	}
-	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		return true
-	}
-	return false
 }
 
 func isValidK8sNamespace(ns string) bool {
-	// Kubernetes namespace naming rules
-	pattern := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-	return pattern.MatchString(ns) && len(ns) <= 63
+	return k8sNamespacePattern.MatchString(ns) && len(ns) <= 63
 }
 
 func isValidConsulEndpoint(endpoint string) bool {
@@ -750,7 +762,14 @@ func isValidConsulEndpoint(endpoint string) bool {
 }
 
 func isValidEmail(email string) bool {
-	// Simple email validation
-	pattern := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
-	return pattern.MatchString(email)
+	if !standardEmailPattern.MatchString(email) {
+		return false
+	}
+
+	parsed, err := mail.ParseAddress(email)
+	if err != nil {
+		return false
+	}
+
+	return parsed.Address == email
 }

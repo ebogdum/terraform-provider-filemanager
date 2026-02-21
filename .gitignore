@@ -8,6 +8,7 @@ terraform-provider-filemanager.exe
 *.so
 *.dylib
 dist/
+.cache
 
 # =============================================================================
 # Scripts (internal use only)

@@ -37,24 +37,11 @@ type fileLock struct {
 
 // Lock acquires a lock on the specified path.
 func (l *FileLocker) Lock(ctx context.Context, path string, opts LockOptions) (Lock, error) {
-	absPath, err := filepath.Abs(path)
+	opts = normalizeLockOptions(opts)
+
+	absPath, err := prepareLockPath(path, opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path: %w", err)
-	}
-
-	// Create lock file if it doesn't exist
-	if opts.CreateIfMissing {
-		dir := filepath.Dir(absPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create lock directory: %w", err)
-		}
-
-		// Touch the file
-		f, err := os.OpenFile(absPath, os.O_CREATE|os.O_RDONLY, opts.Mode)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create lock file: %w", err)
-		}
-		f.Close()
+		return nil, err
 	}
 
 	fl := flock.New(absPath)
@@ -160,23 +147,11 @@ func (l *FileLocker) lockShared(ctx context.Context, fl *flock.Flock, opts LockO
 
 // TryLock attempts to acquire a lock without blocking.
 func (l *FileLocker) TryLock(ctx context.Context, path string, opts LockOptions) (Lock, bool, error) {
-	absPath, err := filepath.Abs(path)
+	opts = normalizeLockOptions(opts)
+
+	absPath, err := prepareLockPath(path, opts)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to get absolute path: %w", err)
-	}
-
-	// Create lock file if it doesn't exist
-	if opts.CreateIfMissing {
-		dir := filepath.Dir(absPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, false, fmt.Errorf("failed to create lock directory: %w", err)
-		}
-
-		f, err := os.OpenFile(absPath, os.O_CREATE|os.O_RDONLY, opts.Mode)
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to create lock file: %w", err)
-		}
-		f.Close()
+		return nil, false, err
 	}
 
 	fl := flock.New(absPath)
@@ -263,9 +238,17 @@ func LockFile(ctx context.Context, path string, exclusive bool, fn func() error)
 	if err != nil {
 		return fmt.Errorf("failed to acquire lock: %w", err)
 	}
-	defer lock.Unlock()
+	defer func() {
+		if unlockErr := lock.Unlock(); unlockErr != nil && err == nil {
+			err = fmt.Errorf("failed to release lock: %w", unlockErr)
+		}
+	}()
 
-	return fn()
+	if err = fn(); err != nil {
+		return err
+	}
+
+	return err
 }
 
 // WithLock executes a function while holding a lock on the specified file.
@@ -278,7 +261,46 @@ func WithLock(ctx context.Context, path string, opts LockOptions, fn func() erro
 	if err != nil {
 		return fmt.Errorf("failed to acquire lock: %w", err)
 	}
-	defer lock.Unlock()
+	defer func() {
+		if unlockErr := lock.Unlock(); unlockErr != nil && err == nil {
+			err = fmt.Errorf("failed to release lock: %w", unlockErr)
+		}
+	}()
 
-	return fn()
+	if err = fn(); err != nil {
+		return err
+	}
+
+	return err
+}
+
+func normalizeLockOptions(opts LockOptions) LockOptions {
+	if opts.RetryInterval <= 0 {
+		opts.RetryInterval = DefaultLockOptions().RetryInterval
+	}
+	return opts
+}
+
+func prepareLockPath(path string, opts LockOptions) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	if opts.CreateIfMissing {
+		dir := filepath.Dir(absPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create lock directory: %w", err)
+		}
+
+		f, err := os.OpenFile(absPath, os.O_CREATE|os.O_RDONLY, opts.Mode)
+		if err != nil {
+			return "", fmt.Errorf("failed to create lock file: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return "", fmt.Errorf("failed to close lock file: %w", err)
+		}
+	}
+
+	return absPath, nil
 }

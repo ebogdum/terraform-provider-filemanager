@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
@@ -449,10 +450,9 @@ func (f *Format) Query(data any, path string) (any, error) {
 			}
 
 		case []any:
-			// Parse array index
-			var idx int
-			if _, err := fmt.Sscanf(part, "%d", &idx); err != nil {
-				return nil, fmt.Errorf("invalid array index: %s", part)
+			idx, err := parseArrayIndex(part)
+			if err != nil {
+				return nil, err
 			}
 			if idx < 0 || idx >= len(v) {
 				return nil, fmt.Errorf("array index out of bounds: %d", idx)
@@ -498,8 +498,8 @@ func (f *Format) Set(data any, path string, value any) (any, error) {
 			current = next
 
 		case []any:
-			var idx int
-			if _, err := fmt.Sscanf(part, "%d", &idx); err != nil {
+			idx, err := parseArrayIndex(part)
+			if err != nil {
 				return nil, fmt.Errorf("invalid array index at %d: %s", i, part)
 			}
 			if idx < 0 || idx >= len(v) {
@@ -519,8 +519,8 @@ func (f *Format) Set(data any, path string, value any) (any, error) {
 		v[lastPart] = value
 
 	case []any:
-		var idx int
-		if _, err := fmt.Sscanf(lastPart, "%d", &idx); err != nil {
+		idx, err := parseArrayIndex(lastPart)
+		if err != nil {
 			return nil, fmt.Errorf("invalid array index: %s", lastPart)
 		}
 		if idx < 0 || idx >= len(v) {
@@ -551,6 +551,10 @@ func (f *Format) Delete(data any, path string) (any, error) {
 
 	// Navigate to parent
 	current := result
+	var parent any
+	var parentMapKey string
+	parentSliceIdx := -1
+
 	for i, part := range parts[:len(parts)-1] {
 		if part == "" {
 			continue
@@ -562,16 +566,22 @@ func (f *Format) Delete(data any, path string) (any, error) {
 			if !ok {
 				return result, nil
 			}
+			parent = v
+			parentMapKey = part
+			parentSliceIdx = -1
 			current = next
 
 		case []any:
-			var idx int
-			if _, err := fmt.Sscanf(part, "%d", &idx); err != nil {
+			idx, err := parseArrayIndex(part)
+			if err != nil {
 				return nil, fmt.Errorf("invalid array index at %d: %s", i, part)
 			}
 			if idx < 0 || idx >= len(v) {
 				return result, nil
 			}
+			parent = v
+			parentSliceIdx = idx
+			parentMapKey = ""
 			current = v[idx]
 
 		default:
@@ -586,12 +596,22 @@ func (f *Format) Delete(data any, path string) (any, error) {
 		delete(v, lastPart)
 
 	case []any:
-		var idx int
-		if _, err := fmt.Sscanf(lastPart, "%d", &idx); err != nil {
+		idx, err := parseArrayIndex(lastPart)
+		if err != nil {
 			return nil, fmt.Errorf("invalid array index: %s", lastPart)
 		}
 		if idx >= 0 && idx < len(v) {
-			copy(v[idx:], v[idx+1:])
+			trimmed := append(v[:idx], v[idx+1:]...)
+			switch p := parent.(type) {
+			case map[string]any:
+				p[parentMapKey] = trimmed
+			case []any:
+				if parentSliceIdx >= 0 && parentSliceIdx < len(p) {
+					p[parentSliceIdx] = trimmed
+				}
+			default:
+				result = trimmed
+			}
 		}
 	}
 
@@ -758,6 +778,14 @@ func deepCopy(v any) any {
 func ParseFile(data []byte, filename string) (*hcl.File, hcl.Diagnostics) {
 	parser := hclparse.NewParser()
 	return parser.ParseHCL(data, filename)
+}
+
+func parseArrayIndex(part string) (int, error) {
+	idx, err := strconv.Atoi(part)
+	if err != nil {
+		return 0, fmt.Errorf("invalid array index: %s", part)
+	}
+	return idx, nil
 }
 
 // FormatFile formats HCL data.
