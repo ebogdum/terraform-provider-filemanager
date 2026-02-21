@@ -142,7 +142,7 @@ func TestFileChecksummer_Calculate(t *testing.T) {
 	path := filepath.Join(dir, "test.txt")
 	content := []byte("Hello, World!")
 
-	if err := os.WriteFile(path, content, 0644); err != nil {
+	if err := os.WriteFile(path, content, 0600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -152,8 +152,8 @@ func TestFileChecksummer_Calculate(t *testing.T) {
 		algo     string
 		expected string
 	}{
-		{"md5", "65a8e27d8879283831b664bd8b7f0ad4"},
 		{"sha256", "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"},
+		{"sha512", "374d794a95cdcfd8b35993185fef9ba368f160d8daf432d08ba9f1ed1e5abe6cc69291e0fa2fe0006a52570ef18c19def4e617c33ce52ef0a6e5fbe318cb0387"},
 	}
 
 	for _, tt := range tests {
@@ -180,8 +180,8 @@ func TestFileChecksummer_CalculateBytes(t *testing.T) {
 		algo     string
 		expected string
 	}{
-		{"md5", "65a8e27d8879283831b664bd8b7f0ad4"},
 		{"sha256", "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"},
+		{"sha512", "374d794a95cdcfd8b35993185fef9ba368f160d8daf432d08ba9f1ed1e5abe6cc69291e0fa2fe0006a52570ef18c19def4e617c33ce52ef0a6e5fbe318cb0387"},
 	}
 
 	for _, tt := range tests {

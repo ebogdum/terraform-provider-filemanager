@@ -61,13 +61,7 @@ func (b *Backend) Connect(ctx context.Context, config plugin.BackendConfig) erro
 	}
 	b.container = container
 
-	// Get auth URL
-	authURL := config.Endpoint
-	if authURL == "" {
-		if url, ok := config.Extra["auth_url"].(string); ok {
-			authURL = url
-		}
-	}
+	authURL := resolveSwiftAuthURL(config)
 	if authURL == "" {
 		return fmt.Errorf("swift auth URL is required")
 	}
@@ -78,15 +72,44 @@ func (b *Backend) Connect(ctx context.Context, config plugin.BackendConfig) erro
 		timeout = 30 * time.Second
 	}
 
-	// Build Swift connection
-	conn := &swift.Connection{
+	conn := newSwiftConnection(config, authURL, timeout)
+	applySwiftOptionalConnectionConfig(conn, config)
+	applySwiftTokenAuth(conn, config)
+
+	if err := conn.Authenticate(ctx); err != nil {
+		return fmt.Errorf("failed to authenticate with Swift: %w", err)
+	}
+
+	if err := ensureSwiftContainer(ctx, conn, container, config); err != nil {
+		return err
+	}
+
+	b.conn = conn
+	b.connected = true
+	return nil
+}
+
+func resolveSwiftAuthURL(config plugin.BackendConfig) string {
+	authURL := config.Endpoint
+	if authURL != "" {
+		return authURL
+	}
+	if url, ok := config.Extra["auth_url"].(string); ok {
+		return url
+	}
+	return ""
+}
+
+func newSwiftConnection(config plugin.BackendConfig, authURL string, timeout time.Duration) *swift.Connection {
+	return &swift.Connection{
 		AuthUrl:  authURL,
 		UserName: config.Username,
 		ApiKey:   config.Password,
 		Timeout:  timeout,
 	}
+}
 
-	// Optional configuration
+func applySwiftOptionalConnectionConfig(conn *swift.Connection, config plugin.BackendConfig) {
 	if tenant, ok := config.Extra["tenant"].(string); ok {
 		conn.Tenant = tenant
 	}
@@ -113,39 +136,35 @@ func (b *Backend) Connect(ctx context.Context, config plugin.BackendConfig) erro
 	if appCredSecret, ok := config.Extra["application_credential_secret"].(string); ok {
 		conn.ApplicationCredentialSecret = appCredSecret
 	}
+}
 
-	// Token-based authentication
+func applySwiftTokenAuth(conn *swift.Connection, config plugin.BackendConfig) {
 	if config.Token != "" {
 		conn.AuthToken = config.Token
 		if storageURL, ok := config.Extra["storage_url"].(string); ok {
 			conn.StorageUrl = storageURL
 		}
 	}
+}
 
-	// Authenticate
-	if err := conn.Authenticate(ctx); err != nil {
-		return fmt.Errorf("failed to authenticate with Swift: %w", err)
-	}
-
-	// Verify container exists (or create if specified)
+func ensureSwiftContainer(ctx context.Context, conn *swift.Connection, container string, config plugin.BackendConfig) error {
 	_, _, err := conn.Container(ctx, container)
-	if err != nil {
-		if err == swift.ContainerNotFound {
-			if createContainer, ok := config.Extra["create_container"].(bool); ok && createContainer {
-				if err := conn.ContainerCreate(ctx, container, nil); err != nil {
-					return fmt.Errorf("failed to create container %s: %w", container, err)
-				}
-			} else {
-				return fmt.Errorf("container %s not found", container)
-			}
-		} else {
-			return fmt.Errorf("failed to access container %s: %w", container, err)
-		}
+	if err == nil {
+		return nil
 	}
 
-	b.conn = conn
-	b.connected = true
-	return nil
+	if err != swift.ContainerNotFound {
+		return fmt.Errorf("failed to access container %s: %w", container, err)
+	}
+
+	if createContainer, ok := config.Extra["create_container"].(bool); ok && createContainer {
+		if createErr := conn.ContainerCreate(ctx, container, nil); createErr != nil {
+			return fmt.Errorf("failed to create container %s: %w", container, createErr)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("container %s not found", container)
 }
 
 // Close closes the backend connection.
@@ -443,7 +462,11 @@ func (b *Backend) List(ctx context.Context, dirPath string, opts plugin.ListOpti
 		return nil, err
 	}
 
-	var results []plugin.FileInfo
+	return b.swiftObjectsToFileInfo(objs, prefix, opts), nil
+}
+
+func (b *Backend) swiftObjectsToFileInfo(objs []swift.Object, prefix string, opts plugin.ListOptions) []plugin.FileInfo {
+	results := make([]plugin.FileInfo, 0, len(objs))
 	seenDirs := make(map[string]bool)
 
 	for _, obj := range objs {
@@ -452,69 +475,83 @@ func (b *Backend) List(ctx context.Context, dirPath string, opts plugin.ListOpti
 			continue
 		}
 
-		// Handle non-recursive listing with delimiter
-		if !opts.Recursive && strings.Contains(name, "/") {
-			// This is a pseudo-directory
-			dirName := strings.Split(name, "/")[0]
-			if seenDirs[dirName] {
+		if !opts.Recursive {
+			if dirInfo, ok := swiftDirEntryFromObject(name, prefix, seenDirs, opts.IncludeHidden); ok {
+				results = append(results, dirInfo)
+				if reachedSwiftMax(opts.MaxResults, len(results)) {
+					break
+				}
 				continue
 			}
-			seenDirs[dirName] = true
-
-			// Skip hidden directories if not included
-			if !opts.IncludeHidden && strings.HasPrefix(dirName, ".") {
-				continue
-			}
-
-			results = append(results, plugin.FileInfo{
-				Name:  dirName,
-				Path:  path.Join(prefix, dirName),
-				IsDir: true,
-				Mode:  os.ModeDir | 0755,
-			})
-			continue
 		}
 
-		// Skip hidden files if not included
 		baseName := path.Base(name)
-		if !opts.IncludeHidden && strings.HasPrefix(baseName, ".") {
+		if shouldSkipSwiftName(baseName, opts) {
 			continue
 		}
 
-		// Apply pattern filter
-		if opts.Pattern != "" {
-			matched, err := path.Match(opts.Pattern, baseName)
-			if err != nil || !matched {
-				continue
-			}
-		}
-
-		isDir := strings.HasSuffix(obj.Name, "/") || obj.ContentType == "application/directory"
-
-		fileInfo := plugin.FileInfo{
-			Name:        baseName,
-			Path:        obj.Name,
-			Size:        obj.Bytes,
-			ModTime:     obj.LastModified,
-			IsDir:       isDir,
-			ContentType: obj.ContentType,
-			ETag:        obj.Hash,
-		}
-
-		if isDir {
-			fileInfo.Mode = os.ModeDir | 0755
-		} else {
-			fileInfo.Mode = 0644
-		}
-
-		results = append(results, fileInfo)
-
-		if opts.MaxResults > 0 && len(results) >= opts.MaxResults {
+		results = append(results, swiftObjectToFileInfo(obj, baseName))
+		if reachedSwiftMax(opts.MaxResults, len(results)) {
 			break
 		}
 	}
 
-	return results, nil
+	return results
+}
+
+func shouldSkipSwiftName(name string, opts plugin.ListOptions) bool {
+	if !opts.IncludeHidden && strings.HasPrefix(name, ".") {
+		return true
+	}
+	if opts.Pattern == "" {
+		return false
+	}
+	matched, err := path.Match(opts.Pattern, name)
+	return err != nil || !matched
+}
+
+func swiftDirEntryFromObject(name, prefix string, seenDirs map[string]bool, includeHidden bool) (plugin.FileInfo, bool) {
+	if !strings.Contains(name, "/") {
+		return plugin.FileInfo{}, false
+	}
+	dirName := strings.Split(name, "/")[0]
+	if seenDirs[dirName] {
+		return plugin.FileInfo{}, false
+	}
+	if !includeHidden && strings.HasPrefix(dirName, ".") {
+		return plugin.FileInfo{}, false
+	}
+
+	seenDirs[dirName] = true
+	return plugin.FileInfo{
+		Name:  dirName,
+		Path:  path.Join(prefix, dirName),
+		IsDir: true,
+		Mode:  os.ModeDir | 0755,
+	}, true
+}
+
+func swiftObjectToFileInfo(obj swift.Object, baseName string) plugin.FileInfo {
+	isDir := strings.HasSuffix(obj.Name, "/") || obj.ContentType == "application/directory"
+	fileInfo := plugin.FileInfo{
+		Name:        baseName,
+		Path:        obj.Name,
+		Size:        obj.Bytes,
+		ModTime:     obj.LastModified,
+		IsDir:       isDir,
+		ContentType: obj.ContentType,
+		ETag:        obj.Hash,
+	}
+	if isDir {
+		fileInfo.Mode = os.ModeDir | 0755
+	} else {
+		fileInfo.Mode = 0644
+	}
+	return fileInfo
+}
+
+func reachedSwiftMax(max, current int) bool {
+	return max > 0 && current >= max
 }
 
 // Mkdir creates a pseudo-directory.

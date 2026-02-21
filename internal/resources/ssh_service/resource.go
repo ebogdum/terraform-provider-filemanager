@@ -136,7 +136,7 @@ func (r *SSHServiceResource) Schema(ctx context.Context, req resource.SchemaRequ
 				Default:     stringdefault.StaticString("30s"),
 			},
 			"insecure_skip_host_key": schema.BoolAttribute{
-				Description: "Skip host key verification. WARNING: This is insecure and should only be used for testing.",
+				Description: "Deprecated insecure option. Setting this to true is rejected for security reasons.",
 				Optional:    true,
 			},
 			"known_hosts_file": schema.StringAttribute{

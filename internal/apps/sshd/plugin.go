@@ -131,182 +131,201 @@ func (p *Plugin) DefaultConfig() any {
 
 // Validate validates the configuration structure.
 func (p *Plugin) Validate(config any) ([]plugin.ValidationError, error) {
-	var errors []plugin.ValidationError
-
 	configMap, ok := config.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("config must be a map")
 	}
 
-	// Validate Port
-	if port, ok := configMap["Port"]; ok {
-		var portNum int
-		switch v := port.(type) {
-		case int:
-			portNum = v
-		case float64:
-			portNum = int(v)
-		}
-		if portNum < 1 || portNum > 65535 {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "Port",
-				Message: fmt.Sprintf("port must be between 1 and 65535, got: %d", portNum),
-			})
-		}
+	var errors []plugin.ValidationError
+	errors = append(errors, validateSSHDPort(configMap)...)
+	errors = append(errors, validateSSHDPermitRootLogin(configMap)...)
+	errors = append(errors, validateSSHDLogLevel(configMap)...)
+	errors = append(errors, validateSSHDSyslogFacility(configMap)...)
+	errors = append(errors, validateSSHDAddressFamily(configMap)...)
+	errors = append(errors, validateSSHDListenAddress(configMap)...)
+	errors = append(errors, validateSSHDMaxStartups(configMap)...)
+	errors = append(errors, p.validateSSHDCrypto(configMap)...)
+	errors = append(errors, validateSSHDMatchBlocks(p, configMap)...)
+	errors = append(errors, validateSSHDIntegerFields(configMap)...)
+	return errors, nil
+}
+
+func validateSSHDPort(configMap map[string]any) []plugin.ValidationError {
+	portNum, ok := sshdAnyToInt(configMap["Port"])
+	if !ok {
+		return nil
+	}
+	if portNum >= 1 && portNum <= 65535 {
+		return nil
 	}
 
-	// Validate PermitRootLogin
-	if permitRoot, ok := configMap["PermitRootLogin"].(string); ok {
-		validValues := []string{"yes", "no", "prohibit-password", "forced-commands-only", "without-password"}
-		found := false
-		for _, vv := range validValues {
-			if permitRoot == vv {
-				found = true
-				break
-			}
-		}
-		if !found {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "PermitRootLogin",
-				Message: fmt.Sprintf("invalid value: %s (valid: yes, no, prohibit-password, forced-commands-only)", permitRoot),
-			})
-		}
+	return []plugin.ValidationError{{
+		Path:    "Port",
+		Message: fmt.Sprintf("port must be between 1 and 65535, got: %d", portNum),
+	}}
+}
+
+func validateSSHDPermitRootLogin(configMap map[string]any) []plugin.ValidationError {
+	permitRoot, ok := configMap["PermitRootLogin"].(string)
+	if !ok {
+		return nil
 	}
 
-	// Validate LogLevel
-	if logLevel, ok := configMap["LogLevel"].(string); ok {
-		validLevels := []string{"QUIET", "FATAL", "ERROR", "INFO", "VERBOSE", "DEBUG", "DEBUG1", "DEBUG2", "DEBUG3"}
-		found := false
-		for _, vl := range validLevels {
-			if logLevel == vl {
-				found = true
-				break
-			}
-		}
-		if !found {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "LogLevel",
-				Message: fmt.Sprintf("invalid log level: %s", logLevel),
-			})
-		}
+	validValues := []string{"yes", "no", "prohibit-password", "forced-commands-only", "without-password"}
+	if sshdContainsString(validValues, permitRoot) {
+		return nil
 	}
 
-	// Validate SyslogFacility
-	if syslogFacility, ok := configMap["SyslogFacility"].(string); ok {
-		validFacilities := []string{
-			"DAEMON", "USER", "AUTH", "AUTHPRIV", "LOCAL0", "LOCAL1",
-			"LOCAL2", "LOCAL3", "LOCAL4", "LOCAL5", "LOCAL6", "LOCAL7",
-		}
-		found := false
-		for _, vf := range validFacilities {
-			if syslogFacility == vf {
-				found = true
-				break
-			}
-		}
-		if !found {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "SyslogFacility",
-				Message: fmt.Sprintf("invalid syslog facility: %s", syslogFacility),
-			})
-		}
+	return []plugin.ValidationError{{
+		Path:    "PermitRootLogin",
+		Message: fmt.Sprintf("invalid value: %s (valid: yes, no, prohibit-password, forced-commands-only)", permitRoot),
+	}}
+}
+
+func validateSSHDLogLevel(configMap map[string]any) []plugin.ValidationError {
+	logLevel, ok := configMap["LogLevel"].(string)
+	if !ok {
+		return nil
 	}
 
-	// Validate AddressFamily
-	if addressFamily, ok := configMap["AddressFamily"].(string); ok {
-		validFamilies := []string{"any", "inet", "inet6"}
-		found := false
-		for _, vf := range validFamilies {
-			if addressFamily == vf {
-				found = true
-				break
-			}
-		}
-		if !found {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "AddressFamily",
-				Message: fmt.Sprintf("invalid address family: %s (valid: any, inet, inet6)", addressFamily),
-			})
-		}
+	validLevels := []string{"QUIET", "FATAL", "ERROR", "INFO", "VERBOSE", "DEBUG", "DEBUG1", "DEBUG2", "DEBUG3"}
+	if sshdContainsString(validLevels, logLevel) {
+		return nil
 	}
 
-	// Validate ListenAddress
+	return []plugin.ValidationError{{
+		Path:    "LogLevel",
+		Message: fmt.Sprintf("invalid log level: %s", logLevel),
+	}}
+}
+
+func validateSSHDSyslogFacility(configMap map[string]any) []plugin.ValidationError {
+	syslogFacility, ok := configMap["SyslogFacility"].(string)
+	if !ok {
+		return nil
+	}
+
+	validFacilities := []string{
+		"DAEMON", "USER", "AUTH", "AUTHPRIV", "LOCAL0", "LOCAL1",
+		"LOCAL2", "LOCAL3", "LOCAL4", "LOCAL5", "LOCAL6", "LOCAL7",
+	}
+	if sshdContainsString(validFacilities, syslogFacility) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "SyslogFacility",
+		Message: fmt.Sprintf("invalid syslog facility: %s", syslogFacility),
+	}}
+}
+
+func validateSSHDAddressFamily(configMap map[string]any) []plugin.ValidationError {
+	addressFamily, ok := configMap["AddressFamily"].(string)
+	if !ok {
+		return nil
+	}
+
+	validFamilies := []string{"any", "inet", "inet6"}
+	if sshdContainsString(validFamilies, addressFamily) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "AddressFamily",
+		Message: fmt.Sprintf("invalid address family: %s (valid: any, inet, inet6)", addressFamily),
+	}}
+}
+
+func validateSSHDListenAddress(configMap map[string]any) []plugin.ValidationError {
 	if listenAddr, ok := configMap["ListenAddress"].(string); ok {
-		if !isValidListenAddress(listenAddr) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "ListenAddress",
-				Message: fmt.Sprintf("invalid listen address: %s", listenAddr),
-			})
+		if isValidListenAddress(listenAddr) {
+			return nil
 		}
-	} else if listenAddrs, ok := configMap["ListenAddress"].([]any); ok {
-		for i, addr := range listenAddrs {
-			if addrStr, ok := addr.(string); ok {
-				if !isValidListenAddress(addrStr) {
-					errors = append(errors, plugin.ValidationError{
-						Path:    fmt.Sprintf("ListenAddress[%d]", i),
-						Message: fmt.Sprintf("invalid listen address: %s", addrStr),
-					})
-				}
-			}
-		}
+		return []plugin.ValidationError{{
+			Path:    "ListenAddress",
+			Message: fmt.Sprintf("invalid listen address: %s", listenAddr),
+		}}
 	}
 
-	// Validate MaxStartups format (start:rate:full or just a number)
-	if maxStartups, ok := configMap["MaxStartups"].(string); ok {
-		if !isValidMaxStartups(maxStartups) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "MaxStartups",
-				Message: fmt.Sprintf("invalid MaxStartups format: %s (expected: start:rate:full or just a number)", maxStartups),
-			})
-		}
+	listenAddrs, ok := configMap["ListenAddress"].([]any)
+	if !ok {
+		return nil
 	}
 
-	// Validate Ciphers
+	var errors []plugin.ValidationError
+	for i, addr := range listenAddrs {
+		addrStr, ok := addr.(string)
+		if !ok || isValidListenAddress(addrStr) {
+			continue
+		}
+		errors = append(errors, plugin.ValidationError{
+			Path:    fmt.Sprintf("ListenAddress[%d]", i),
+			Message: fmt.Sprintf("invalid listen address: %s", addrStr),
+		})
+	}
+	return errors
+}
+
+func validateSSHDMaxStartups(configMap map[string]any) []plugin.ValidationError {
+	maxStartups, ok := configMap["MaxStartups"].(string)
+	if !ok {
+		return nil
+	}
+
+	if isValidMaxStartups(maxStartups) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "MaxStartups",
+		Message: fmt.Sprintf("invalid MaxStartups format: %s (expected: start:rate:full or just a number)", maxStartups),
+	}}
+}
+
+func (p *Plugin) validateSSHDCrypto(configMap map[string]any) []plugin.ValidationError {
+	var errors []plugin.ValidationError
 	if ciphers, ok := configMap["Ciphers"].(string); ok {
 		errors = append(errors, p.validateCiphers(ciphers)...)
 	}
-
-	// Validate MACs
 	if macs, ok := configMap["MACs"].(string); ok {
 		errors = append(errors, p.validateMACs(macs)...)
 	}
-
-	// Validate KexAlgorithms
 	if kex, ok := configMap["KexAlgorithms"].(string); ok {
 		errors = append(errors, p.validateKexAlgorithms(kex)...)
 	}
+	return errors
+}
 
-	// Validate Match blocks
-	if matches, ok := configMap["Match"].([]any); ok {
-		errors = append(errors, p.validateMatchBlocks(matches)...)
+func validateSSHDMatchBlocks(p *Plugin, configMap map[string]any) []plugin.ValidationError {
+	matches, ok := configMap["Match"].([]any)
+	if !ok {
+		return nil
 	}
+	return p.validateMatchBlocks(matches)
+}
 
-	// Validate integer fields
+func validateSSHDIntegerFields(configMap map[string]any) []plugin.ValidationError {
 	intFields := map[string]struct{ min, max int }{
 		"ClientAliveInterval": {0, 86400},
 		"ClientAliveCountMax": {0, 100},
 		"MaxAuthTries":        {1, 100},
 		"MaxSessions":         {1, 100},
 	}
+
+	var errors []plugin.ValidationError
 	for field, limits := range intFields {
-		if val, ok := configMap[field]; ok {
-			var intVal int
-			switch v := val.(type) {
-			case int:
-				intVal = v
-			case float64:
-				intVal = int(v)
-			}
-			if intVal < limits.min || intVal > limits.max {
-				errors = append(errors, plugin.ValidationError{
-					Path:    field,
-					Message: fmt.Sprintf("%s must be between %d and %d, got: %d", field, limits.min, limits.max, intVal),
-				})
-			}
+		intVal, ok := sshdAnyToInt(configMap[field])
+		if !ok {
+			continue
+		}
+		if intVal < limits.min || intVal > limits.max {
+			errors = append(errors, plugin.ValidationError{
+				Path:    field,
+				Message: fmt.Sprintf("%s must be between %d and %d, got: %d", field, limits.min, limits.max, intVal),
+			})
 		}
 	}
-
-	return errors, nil
+	return errors
 }
 
 func (p *Plugin) validateCiphers(ciphers string) []plugin.ValidationError {
@@ -594,84 +613,94 @@ func (p *Plugin) ToNative(config any) ([]byte, error) {
 	}
 
 	var sb strings.Builder
+	writeSSHDConfigHeader(&sb)
+	writeSSHDMainDirectives(&sb, configMap)
+	writeSSHDMatchBlocks(&sb, configMap)
+	return []byte(sb.String()), nil
+}
 
-	// Write header comment
+func writeSSHDConfigHeader(sb *strings.Builder) {
 	sb.WriteString("# sshd_config - Generated by terraform-provider-filemanager\n")
 	sb.WriteString("# Do not edit manually\n\n")
+}
 
-	// Write main directives (excluding Match blocks)
+func writeSSHDMainDirectives(sb *strings.Builder, configMap map[string]any) {
 	for key, value := range configMap {
 		if key == "Match" {
 			continue
 		}
-
-		// Handle Subsystem specially (it's a map)
-		if key == "Subsystem" {
-			if subsystems, ok := value.(map[string]any); ok {
-				for name, cmd := range subsystems {
-					sb.WriteString(fmt.Sprintf("Subsystem %s %v\n", name, cmd))
-				}
-			} else if subsystems, ok := value.(map[string]string); ok {
-				for name, cmd := range subsystems {
-					sb.WriteString(fmt.Sprintf("Subsystem %s %s\n", name, cmd))
-				}
-			}
+		if writeSSHDSpecialDirective(sb, key, value) {
 			continue
 		}
-
-		// Handle HostKey (can be multiple)
-		if key == "HostKey" {
-			switch v := value.(type) {
-			case string:
-				sb.WriteString(fmt.Sprintf("HostKey %s\n", v))
-			case []any:
-				for _, hk := range v {
-					sb.WriteString(fmt.Sprintf("HostKey %v\n", hk))
-				}
-			}
-			continue
-		}
-
-		// Handle ListenAddress (can be multiple)
-		if key == "ListenAddress" {
-			switch v := value.(type) {
-			case string:
-				sb.WriteString(fmt.Sprintf("ListenAddress %s\n", v))
-			case []any:
-				for _, addr := range v {
-					sb.WriteString(fmt.Sprintf("ListenAddress %v\n", addr))
-				}
-			}
-			continue
-		}
-
-		// Convert value to sshd_config format
 		sb.WriteString(fmt.Sprintf("%s %s\n", key, formatValue(value)))
 	}
+}
 
-	// Write Match blocks
-	if matches, ok := configMap["Match"].([]any); ok {
-		for _, match := range matches {
-			matchMap, ok := match.(map[string]any)
-			if !ok {
-				continue
-			}
+func writeSSHDSpecialDirective(sb *strings.Builder, key string, value any) bool {
+	switch key {
+	case "Subsystem":
+		writeSSHDSubsystemDirectives(sb, value)
+		return true
+	case "HostKey":
+		writeSSHDMultiLineDirective(sb, "HostKey", value)
+		return true
+	case "ListenAddress":
+		writeSSHDMultiLineDirective(sb, "ListenAddress", value)
+		return true
+	default:
+		return false
+	}
+}
 
-			sb.WriteString("\n")
-			if condition, ok := matchMap["condition"].(string); ok {
-				sb.WriteString(fmt.Sprintf("Match %s\n", condition))
-			}
-
-			for key, value := range matchMap {
-				if key == "condition" {
-					continue
-				}
-				sb.WriteString(fmt.Sprintf("    %s %s\n", key, formatValue(value)))
-			}
+func writeSSHDSubsystemDirectives(sb *strings.Builder, value any) {
+	if subsystems, ok := value.(map[string]any); ok {
+		for name, cmd := range subsystems {
+			sb.WriteString(fmt.Sprintf("Subsystem %s %v\n", name, cmd))
 		}
+		return
 	}
 
-	return []byte(sb.String()), nil
+	if subsystems, ok := value.(map[string]string); ok {
+		for name, cmd := range subsystems {
+			sb.WriteString(fmt.Sprintf("Subsystem %s %s\n", name, cmd))
+		}
+	}
+}
+
+func writeSSHDMultiLineDirective(sb *strings.Builder, key string, value any) {
+	switch v := value.(type) {
+	case string:
+		sb.WriteString(fmt.Sprintf("%s %s\n", key, v))
+	case []any:
+		for _, item := range v {
+			sb.WriteString(fmt.Sprintf("%s %v\n", key, item))
+		}
+	}
+}
+
+func writeSSHDMatchBlocks(sb *strings.Builder, configMap map[string]any) {
+	matches, ok := configMap["Match"].([]any)
+	if !ok {
+		return
+	}
+
+	for _, match := range matches {
+		matchMap, ok := match.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		sb.WriteString("\n")
+		if condition, ok := matchMap["condition"].(string); ok {
+			sb.WriteString(fmt.Sprintf("Match %s\n", condition))
+		}
+		for key, value := range matchMap {
+			if key == "condition" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("    %s %s\n", key, formatValue(value)))
+		}
+	}
 }
 
 // FromNative parses native sshd_config format.
@@ -683,74 +712,89 @@ func (p *Plugin) FromNative(data []byte) (any, error) {
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-
-		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
-		// Split into key and value
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) < 2 {
+		key, value, ok := parseSSHDDirective(line)
+		if !ok {
 			continue
 		}
 
-		key := parts[0]
-		value := strings.TrimSpace(parts[1])
-
-		// Handle Match blocks
 		if strings.EqualFold(key, "Match") {
-			// Save previous match block
-			if currentMatch != nil {
-				matches = append(matches, currentMatch)
-			}
-			currentMatch = map[string]any{
-				"condition": value,
-			}
+			currentMatch, matches = startSSHDMatchBlock(currentMatch, matches, value)
 			continue
 		}
 
-		// If we're in a Match block, add to that
 		if currentMatch != nil {
 			currentMatch[key] = parseValue(value)
-		} else {
-			// Handle directives that can appear multiple times
-			if key == "HostKey" || key == "ListenAddress" {
-				if existing, ok := config[key].([]any); ok {
-					config[key] = append(existing, value)
-				} else if existing, ok := config[key].(string); ok {
-					config[key] = []any{existing, value}
-				} else {
-					config[key] = value
-				}
-			} else if key == "Subsystem" {
-				// Parse Subsystem name command
-				subParts := strings.SplitN(value, " ", 2)
-				if len(subParts) == 2 {
-					if subsystems, ok := config["Subsystem"].(map[string]any); ok {
-						subsystems[subParts[0]] = subParts[1]
-					} else {
-						config["Subsystem"] = map[string]any{
-							subParts[0]: subParts[1],
-						}
-					}
-				}
-			} else {
-				config[key] = parseValue(value)
-			}
+			continue
 		}
+
+		writeSSHDParsedDirective(config, key, value)
 	}
 
-	// Save last match block
 	if currentMatch != nil {
 		matches = append(matches, currentMatch)
 	}
-
 	if len(matches) > 0 {
 		config["Match"] = matches
 	}
-
 	return config, nil
+}
+
+func parseSSHDDirective(line string) (string, string, bool) {
+	parts := strings.SplitN(line, " ", 2)
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	return parts[0], strings.TrimSpace(parts[1]), true
+}
+
+func startSSHDMatchBlock(currentMatch map[string]any, matches []any, condition string) (map[string]any, []any) {
+	if currentMatch != nil {
+		matches = append(matches, currentMatch)
+	}
+	return map[string]any{"condition": condition}, matches
+}
+
+func writeSSHDParsedDirective(config map[string]any, key, value string) {
+	switch key {
+	case "HostKey", "ListenAddress":
+		appendSSHDMultiValueDirective(config, key, value)
+	case "Subsystem":
+		appendSSHDSubsystemDirective(config, value)
+	default:
+		config[key] = parseValue(value)
+	}
+}
+
+func appendSSHDMultiValueDirective(config map[string]any, key, value string) {
+	if existing, ok := config[key].([]any); ok {
+		config[key] = append(existing, value)
+		return
+	}
+	if existing, ok := config[key].(string); ok {
+		config[key] = []any{existing, value}
+		return
+	}
+	config[key] = value
+}
+
+func appendSSHDSubsystemDirective(config map[string]any, value string) {
+	subParts := strings.SplitN(value, " ", 2)
+	if len(subParts) != 2 {
+		return
+	}
+
+	if subsystems, ok := config["Subsystem"].(map[string]any); ok {
+		subsystems[subParts[0]] = subParts[1]
+		return
+	}
+
+	config["Subsystem"] = map[string]any{
+		subParts[0]: subParts[1],
+	}
 }
 
 // Merge merges two configurations.
@@ -798,6 +842,28 @@ func parseValue(value string) any {
 	}
 
 	return value
+}
+
+func sshdAnyToInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
+func sshdContainsString(values []string, candidate string) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func isValidListenAddress(addr string) bool {

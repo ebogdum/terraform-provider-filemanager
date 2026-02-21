@@ -5,7 +5,6 @@ package tfvars_file
 
 import (
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -198,7 +197,7 @@ Manages a Terraform ` + "`.tfvars`" + ` file with native dynamic type support, i
 				Computed:    true,
 			},
 			"md5": schema.StringAttribute{
-				Description: "MD5 checksum of the file content.",
+				Description: "Deprecated insecure checksum field. Always null.",
 				Computed:    true,
 			},
 			"sha256": schema.StringAttribute{
@@ -429,105 +428,127 @@ func (r *TfvarsFileResource) ImportState(ctx context.Context, req resource.Impor
 
 // generateContent generates the final tfvars content.
 func (r *TfvarsFileResource) generateContent(ctx context.Context, data *TfvarsFileResourceModel) ([]byte, int64, error) {
-	// Convert Vars (types.Dynamic) to map[string]any
-	goVars, err := common.TerraformDynamicToGoValue(ctx, data.Vars)
+	vars, err := tfvarsFromDynamic(ctx, data.Vars)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to convert vars: %w", err)
+		return nil, 0, err
 	}
 
-	vars, ok := goVars.(map[string]any)
-	if !ok {
-		if nil == goVars {
-			vars = make(map[string]any)
-		} else {
-			return nil, 0, fmt.Errorf("vars must be an object/map, got %T", goVars)
-		}
-	}
-
-	// Extract template_vars
-	var templateVars map[string]string
-	if !data.TemplateVars.IsNull() && !data.TemplateVars.IsUnknown() {
-		elems := data.TemplateVars.Elements()
-		templateVars = make(map[string]string, len(elems))
-		for k, v := range elems {
-			templateVars[k] = v.(types.String).ValueString()
-		}
-	}
-
-	// Resolve interpolation
+	templateVars := templateVarsMap(data.TemplateVars)
 	leftDelim := data.LeftDelim.ValueString()
 	rightDelim := data.RightDelim.ValueString()
-
 	resolved, err := ResolveInterpolation(vars, templateVars, leftDelim, rightDelim)
 	if err != nil {
 		return nil, 0, fmt.Errorf("interpolation error: %w", err)
 	}
 
-	// Merge with existing if requested
 	if data.MergeWithExisting.ValueBool() {
-		backend, backendErr := r.getBackend(ctx, data.Service.ValueString())
-		if nil == backendErr {
-			exists, existsErr := backend.Exists(ctx, data.Path.ValueString())
-			if nil == existsErr && exists {
-				reader, readErr := backend.Read(ctx, data.Path.ValueString())
-				if nil == readErr {
-					existingContent, ioErr := io.ReadAll(reader)
-					reader.Close()
-					if nil == ioErr && len(existingContent) > 0 {
-						var existing map[string]any
-						format := detectFormat(data.Path.ValueString())
-						if "json" == format {
-							existing, _ = ParseTfvarsJSON(existingContent)
-						} else {
-							existing, _ = ParseTfvarsHCL(existingContent)
-						}
-
-						if nil != existing {
-							strategy := data.MergeStrategy.ValueString()
-							if "keep_existing" == strategy {
-								// Existing values take precedence
-								for k, v := range resolved {
-									if _, exists := existing[k]; !exists {
-										existing[k] = v
-									}
-								}
-								resolved = existing
-							} else {
-								// "replace": resolved vars override existing
-								for k, v := range existing {
-									if _, exists := resolved[k]; !exists {
-										resolved[k] = v
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
+		resolved = r.mergeWithExisting(ctx, data, resolved)
 	}
 
-	// Apply delete_vars
-	if !data.DeleteVars.IsNull() && !data.DeleteVars.IsUnknown() {
-		elems := data.DeleteVars.Elements()
-		for _, elem := range elems {
-			key := elem.(types.String).ValueString()
-			delete(resolved, key)
-		}
-	}
-
-	// Serialize
-	var content []byte
-	if data.JSONFormat.ValueBool() {
-		content, err = SerializeTfvarsJSON(resolved, "  ")
-	} else {
-		content, err = SerializeTfvars(resolved, data.SortKeys.ValueBool())
-	}
+	applyDeleteVars(resolved, data.DeleteVars)
+	content, err := serializeTfvars(resolved, data)
 	if err != nil {
 		return nil, 0, err
 	}
-
 	return content, int64(len(resolved)), nil
+}
+
+func tfvarsFromDynamic(ctx context.Context, varsDynamic types.Dynamic) (map[string]any, error) {
+	goVars, err := common.TerraformDynamicToGoValue(ctx, varsDynamic)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert vars: %w", err)
+	}
+
+	if goVars == nil {
+		return make(map[string]any), nil
+	}
+
+	vars, ok := goVars.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("vars must be an object/map, got %T", goVars)
+	}
+	return vars, nil
+}
+
+func templateVarsMap(templateVarsInput types.Map) map[string]string {
+	if templateVarsInput.IsNull() || templateVarsInput.IsUnknown() {
+		return nil
+	}
+	elems := templateVarsInput.Elements()
+	templateVars := make(map[string]string, len(elems))
+	for k, v := range elems {
+		templateVars[k] = v.(types.String).ValueString()
+	}
+	return templateVars
+}
+
+func (r *TfvarsFileResource) mergeWithExisting(ctx context.Context, data *TfvarsFileResourceModel, resolved map[string]any) map[string]any {
+	backend, err := r.getBackend(ctx, data.Service.ValueString())
+	if err != nil {
+		return resolved
+	}
+
+	exists, err := backend.Exists(ctx, data.Path.ValueString())
+	if err != nil || !exists {
+		return resolved
+	}
+
+	reader, err := backend.Read(ctx, data.Path.ValueString())
+	if err != nil {
+		return resolved
+	}
+	existingContent, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || len(existingContent) == 0 {
+		return resolved
+	}
+
+	existing := parseExistingTfvars(data.Path.ValueString(), existingContent)
+	if existing == nil {
+		return resolved
+	}
+
+	if data.MergeStrategy.ValueString() == "keep_existing" {
+		for k, v := range resolved {
+			if _, exists := existing[k]; !exists {
+				existing[k] = v
+			}
+		}
+		return existing
+	}
+
+	for k, v := range existing {
+		if _, exists := resolved[k]; !exists {
+			resolved[k] = v
+		}
+	}
+	return resolved
+}
+
+func parseExistingTfvars(path string, content []byte) map[string]any {
+	if detectFormat(path) == "json" {
+		existing, _ := ParseTfvarsJSON(content)
+		return existing
+	}
+	existing, _ := ParseTfvarsHCL(content)
+	return existing
+}
+
+func applyDeleteVars(resolved map[string]any, deleteVars types.List) {
+	if deleteVars.IsNull() || deleteVars.IsUnknown() {
+		return
+	}
+	for _, elem := range deleteVars.Elements() {
+		key := elem.(types.String).ValueString()
+		delete(resolved, key)
+	}
+}
+
+func serializeTfvars(resolved map[string]any, data *TfvarsFileResourceModel) ([]byte, error) {
+	if data.JSONFormat.ValueBool() {
+		return SerializeTfvarsJSON(resolved, "  ")
+	}
+	return SerializeTfvars(resolved, data.SortKeys.ValueBool())
 }
 
 // getBackend returns the appropriate backend.
@@ -544,8 +565,7 @@ func (r *TfvarsFileResource) updateComputedValues(data *TfvarsFileResourceModel,
 	data.Rendered = types.StringValue(string(content))
 	data.VarCount = types.Int64Value(varCount)
 
-	md5sum := md5.Sum(content)
-	data.MD5 = types.StringValue(hex.EncodeToString(md5sum[:]))
+	data.MD5 = types.StringNull()
 
 	sha256sum := sha256.Sum256(content)
 	data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))

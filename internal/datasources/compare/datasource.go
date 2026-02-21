@@ -6,8 +6,6 @@ package compare
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
-	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -37,6 +35,22 @@ func NewCompareDataSource() datasource.DataSource {
 // CompareDataSource defines the data source implementation.
 type CompareDataSource struct {
 	config *common.ProviderConfig
+}
+
+type compareOptions struct {
+	compareContent  bool
+	compareChecksum bool
+	compareSize     bool
+	compareMode     bool
+	compareOwner    bool
+	compareMtime    bool
+	checksumAlgo    string
+	mtimeTolerance  time.Duration
+}
+
+type compareResultState struct {
+	differences []string
+	identical   bool
 }
 
 // CompareDataSourceModel describes the data source data model.
@@ -150,10 +164,10 @@ func (d *CompareDataSource) Schema(ctx context.Context, req datasource.SchemaReq
 				Optional:    true,
 			},
 			"checksum_algorithm": schema.StringAttribute{
-				Description: "Checksum algorithm: md5, sha1, sha256, sha512. Defaults to sha256.",
+				Description: "Checksum algorithm: sha256, sha512. Defaults to sha256.",
 				Optional:    true,
 				Validators: []validator.String{
-					stringvalidator.OneOf("md5", "sha1", "sha256", "sha512"),
+					stringvalidator.OneOf("sha256", "sha512"),
 				},
 			},
 			"mtime_tolerance": schema.StringAttribute{
@@ -292,53 +306,12 @@ func (d *CompareDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	// Set defaults
-	compareContent := true
-	if !data.CompareContent.IsNull() {
-		compareContent = data.CompareContent.ValueBool()
+	options, err := compareOptionsFromModel(&data)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid mtime_tolerance", err.Error())
+		return
 	}
 
-	compareChecksum := true
-	if !data.CompareChecksum.IsNull() {
-		compareChecksum = data.CompareChecksum.ValueBool()
-	}
-
-	compareSize := true
-	if !data.CompareSize.IsNull() {
-		compareSize = data.CompareSize.ValueBool()
-	}
-
-	compareMode := true
-	if !data.CompareMode.IsNull() {
-		compareMode = data.CompareMode.ValueBool()
-	}
-
-	compareOwner := false
-	if !data.CompareOwner.IsNull() {
-		compareOwner = data.CompareOwner.ValueBool()
-	}
-
-	compareMtime := false
-	if !data.CompareMtime.IsNull() {
-		compareMtime = data.CompareMtime.ValueBool()
-	}
-
-	checksumAlgo := "sha256"
-	if !data.ChecksumAlgorithm.IsNull() && data.ChecksumAlgorithm.ValueString() != "" {
-		checksumAlgo = data.ChecksumAlgorithm.ValueString()
-	}
-
-	var mtimeTolerance time.Duration
-	if !data.MtimeTolerance.IsNull() && data.MtimeTolerance.ValueString() != "" {
-		var err error
-		mtimeTolerance, err = time.ParseDuration(data.MtimeTolerance.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Invalid mtime_tolerance", err.Error())
-			return
-		}
-	}
-
-	// Get backends
 	sourceBackend, err := d.getBackend(ctx, data.SourceBackend.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to get source backend", err.Error())
@@ -351,16 +324,9 @@ func (d *CompareDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	// Check existence
-	sourceExists, err := sourceBackend.Exists(ctx, data.Source.ValueString())
+	sourceExists, targetExists, err := checkCompareExistence(ctx, sourceBackend, targetBackend, data.Source.ValueString(), data.Target.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to check source existence", err.Error())
-		return
-	}
-
-	targetExists, err := targetBackend.Exists(ctx, data.Target.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Failed to check target existence", err.Error())
+		resp.Diagnostics.AddError("Failed to check source/target existence", err.Error())
 		return
 	}
 
@@ -368,67 +334,150 @@ func (d *CompareDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	data.SourceExists = types.BoolValue(sourceExists)
 	data.TargetExists = types.BoolValue(targetExists)
 
-	// If either file doesn't exist, we can't compare
 	if !sourceExists || !targetExists {
-		data.Identical = types.BoolValue(false)
-		data.ContentMatch = types.BoolNull()
-		data.ChecksumMatch = types.BoolNull()
-		data.SizeMatch = types.BoolNull()
-		data.ModeMatch = types.BoolNull()
-		data.OwnerMatch = types.BoolNull()
-		data.MtimeMatch = types.BoolNull()
-		data.SourceChecksum = types.StringNull()
-		data.SourceSize = types.Int64Null()
-		data.SourceMode = types.StringNull()
-		data.SourceUID = types.Int64Null()
-		data.SourceGID = types.Int64Null()
-		data.SourceMtime = types.StringNull()
-		data.TargetChecksum = types.StringNull()
-		data.TargetSize = types.Int64Null()
-		data.TargetMode = types.StringNull()
-		data.TargetUID = types.Int64Null()
-		data.TargetGID = types.Int64Null()
-		data.TargetMtime = types.StringNull()
-
-		differences := []string{}
-		if !sourceExists {
-			differences = append(differences, "source_missing")
-		}
-		if !targetExists {
-			differences = append(differences, "target_missing")
-		}
-		diffList, diags := types.ListValueFrom(ctx, types.StringType, differences)
-		resp.Diagnostics.Append(diags...)
-		data.Differences = diffList
-
+		setCompareMissingState(ctx, &data, resp, sourceExists, targetExists)
 		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 		return
 	}
 
-	// Get file info for both files
-	sourceInfo, err := sourceBackend.Stat(ctx, data.Source.ValueString())
+	sourceInfo, targetInfo, err := statComparedFiles(ctx, sourceBackend, targetBackend, data.Source.ValueString(), data.Target.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to stat source", err.Error())
+		resp.Diagnostics.AddError("Failed to stat source/target", err.Error())
 		return
 	}
 
-	targetInfo, err := targetBackend.Stat(ctx, data.Target.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Failed to stat target", err.Error())
+	if err := ensureComparedFiles(sourceInfo, targetInfo); err != nil {
+		resp.Diagnostics.AddError("Invalid comparison target", err.Error())
 		return
 	}
 
-	// Check if either is a directory
+	populateComparedMetadata(&data, sourceInfo, targetInfo)
+	state := compareResultState{differences: make([]string, 0), identical: true}
+	compareFileMetadata(&data, sourceInfo, targetInfo, options, &state)
+
+	if err := d.compareFileContent(ctx, sourceBackend, targetBackend, &data, options, &state); err != nil {
+		resp.Diagnostics.AddError("Content comparison failed", err.Error())
+		return
+	}
+
+	data.Identical = types.BoolValue(state.identical)
+
+	diffList, diags := types.ListValueFrom(ctx, types.StringType, state.differences)
+	resp.Diagnostics.Append(diags...)
+	data.Differences = diffList
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+func compareOptionsFromModel(data *CompareDataSourceModel) (compareOptions, error) {
+	opts := compareOptions{
+		compareContent:  true,
+		compareChecksum: true,
+		compareSize:     true,
+		compareMode:     true,
+		compareOwner:    false,
+		compareMtime:    false,
+		checksumAlgo:    "sha256",
+	}
+	if !data.CompareContent.IsNull() {
+		opts.compareContent = data.CompareContent.ValueBool()
+	}
+	if !data.CompareChecksum.IsNull() {
+		opts.compareChecksum = data.CompareChecksum.ValueBool()
+	}
+	if !data.CompareSize.IsNull() {
+		opts.compareSize = data.CompareSize.ValueBool()
+	}
+	if !data.CompareMode.IsNull() {
+		opts.compareMode = data.CompareMode.ValueBool()
+	}
+	if !data.CompareOwner.IsNull() {
+		opts.compareOwner = data.CompareOwner.ValueBool()
+	}
+	if !data.CompareMtime.IsNull() {
+		opts.compareMtime = data.CompareMtime.ValueBool()
+	}
+	if !data.ChecksumAlgorithm.IsNull() && data.ChecksumAlgorithm.ValueString() != "" {
+		opts.checksumAlgo = data.ChecksumAlgorithm.ValueString()
+	}
+	if !data.MtimeTolerance.IsNull() && data.MtimeTolerance.ValueString() != "" {
+		tolerance, err := time.ParseDuration(data.MtimeTolerance.ValueString())
+		if err != nil {
+			return compareOptions{}, err
+		}
+		opts.mtimeTolerance = tolerance
+	}
+	return opts, nil
+}
+
+func checkCompareExistence(ctx context.Context, sourceBackend, targetBackend plugin.Backend, sourcePath, targetPath string) (bool, bool, error) {
+	sourceExists, err := sourceBackend.Exists(ctx, sourcePath)
+	if err != nil {
+		return false, false, err
+	}
+	targetExists, err := targetBackend.Exists(ctx, targetPath)
+	if err != nil {
+		return false, false, err
+	}
+	return sourceExists, targetExists, nil
+}
+
+func setCompareMissingState(ctx context.Context, data *CompareDataSourceModel, resp *datasource.ReadResponse, sourceExists, targetExists bool) {
+	data.Identical = types.BoolValue(false)
+	data.ContentMatch = types.BoolNull()
+	data.ChecksumMatch = types.BoolNull()
+	data.SizeMatch = types.BoolNull()
+	data.ModeMatch = types.BoolNull()
+	data.OwnerMatch = types.BoolNull()
+	data.MtimeMatch = types.BoolNull()
+	data.SourceChecksum = types.StringNull()
+	data.SourceSize = types.Int64Null()
+	data.SourceMode = types.StringNull()
+	data.SourceUID = types.Int64Null()
+	data.SourceGID = types.Int64Null()
+	data.SourceMtime = types.StringNull()
+	data.TargetChecksum = types.StringNull()
+	data.TargetSize = types.Int64Null()
+	data.TargetMode = types.StringNull()
+	data.TargetUID = types.Int64Null()
+	data.TargetGID = types.Int64Null()
+	data.TargetMtime = types.StringNull()
+
+	differences := make([]string, 0, 2)
+	if !sourceExists {
+		differences = append(differences, "source_missing")
+	}
+	if !targetExists {
+		differences = append(differences, "target_missing")
+	}
+	diffList, diags := types.ListValueFrom(ctx, types.StringType, differences)
+	resp.Diagnostics.Append(diags...)
+	data.Differences = diffList
+}
+
+func statComparedFiles(ctx context.Context, sourceBackend, targetBackend plugin.Backend, sourcePath, targetPath string) (*plugin.FileInfo, *plugin.FileInfo, error) {
+	sourceInfo, err := sourceBackend.Stat(ctx, sourcePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	targetInfo, err := targetBackend.Stat(ctx, targetPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sourceInfo, targetInfo, nil
+}
+
+func ensureComparedFiles(sourceInfo, targetInfo *plugin.FileInfo) error {
 	if sourceInfo.IsDir {
-		resp.Diagnostics.AddError("Source is a directory", "Source path is a directory, not a file")
-		return
+		return fmt.Errorf("source path is a directory, not a file")
 	}
 	if targetInfo.IsDir {
-		resp.Diagnostics.AddError("Target is a directory", "Target path is a directory, not a file")
-		return
+		return fmt.Errorf("target path is a directory, not a file")
 	}
+	return nil
+}
 
-	// Set metadata
+func populateComparedMetadata(data *CompareDataSourceModel, sourceInfo, targetInfo *plugin.FileInfo) {
 	data.SourceSize = types.Int64Value(sourceInfo.Size)
 	data.SourceMode = types.StringValue(fmt.Sprintf("%04o", sourceInfo.Mode.Perm()))
 	data.SourceUID = types.Int64Value(int64(sourceInfo.UID))
@@ -440,145 +489,125 @@ func (d *CompareDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	data.TargetUID = types.Int64Value(int64(targetInfo.UID))
 	data.TargetGID = types.Int64Value(int64(targetInfo.GID))
 	data.TargetMtime = types.StringValue(targetInfo.ModTime.Format(time.RFC3339))
+}
 
-	differences := []string{}
-	identical := true
-
-	// Compare size
-	if compareSize {
+func compareFileMetadata(data *CompareDataSourceModel, sourceInfo, targetInfo *plugin.FileInfo, opts compareOptions, state *compareResultState) {
+	if opts.compareSize {
 		sizeMatch := sourceInfo.Size == targetInfo.Size
 		data.SizeMatch = types.BoolValue(sizeMatch)
 		if !sizeMatch {
-			differences = append(differences, "size")
-			identical = false
+			state.differences = append(state.differences, "size")
+			state.identical = false
 		}
 	} else {
 		data.SizeMatch = types.BoolNull()
 	}
 
-	// Compare mode
-	if compareMode {
+	if opts.compareMode {
 		modeMatch := sourceInfo.Mode.Perm() == targetInfo.Mode.Perm()
 		data.ModeMatch = types.BoolValue(modeMatch)
 		if !modeMatch {
-			differences = append(differences, "mode")
-			identical = false
+			state.differences = append(state.differences, "mode")
+			state.identical = false
 		}
 	} else {
 		data.ModeMatch = types.BoolNull()
 	}
 
-	// Compare owner
-	if compareOwner {
+	if opts.compareOwner {
 		ownerMatch := sourceInfo.UID == targetInfo.UID && sourceInfo.GID == targetInfo.GID
 		data.OwnerMatch = types.BoolValue(ownerMatch)
 		if !ownerMatch {
 			if sourceInfo.UID != targetInfo.UID {
-				differences = append(differences, "uid")
+				state.differences = append(state.differences, "uid")
 			}
 			if sourceInfo.GID != targetInfo.GID {
-				differences = append(differences, "gid")
+				state.differences = append(state.differences, "gid")
 			}
-			identical = false
+			state.identical = false
 		}
 	} else {
 		data.OwnerMatch = types.BoolNull()
 	}
 
-	// Compare mtime
-	if compareMtime {
-		var mtimeMatch bool
-		if mtimeTolerance > 0 {
-			diff := sourceInfo.ModTime.Sub(targetInfo.ModTime)
-			if diff < 0 {
-				diff = -diff
-			}
-			mtimeMatch = diff <= mtimeTolerance
-		} else {
-			mtimeMatch = sourceInfo.ModTime.Equal(targetInfo.ModTime)
-		}
+	if opts.compareMtime {
+		mtimeMatch := compareMtimeWithTolerance(sourceInfo.ModTime, targetInfo.ModTime, opts.mtimeTolerance)
 		data.MtimeMatch = types.BoolValue(mtimeMatch)
 		if !mtimeMatch {
-			differences = append(differences, "mtime")
-			identical = false
+			state.differences = append(state.differences, "mtime")
+			state.identical = false
 		}
 	} else {
 		data.MtimeMatch = types.BoolNull()
 	}
+}
 
-	// Compare content and/or checksum
-	if compareContent || compareChecksum {
-		// Read source content
-		sourceReader, err := sourceBackend.Read(ctx, data.Source.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Failed to read source", err.Error())
-			return
-		}
+func compareMtimeWithTolerance(source, target time.Time, tolerance time.Duration) bool {
+	if tolerance <= 0 {
+		return source.Equal(target)
+	}
+	diff := source.Sub(target)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= tolerance
+}
 
-		sourceContent, err := io.ReadAll(sourceReader)
-		sourceReader.Close()
-		if err != nil {
-			resp.Diagnostics.AddError("Failed to read source content", err.Error())
-			return
-		}
-
-		// Read target content
-		targetReader, err := targetBackend.Read(ctx, data.Target.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Failed to read target", err.Error())
-			return
-		}
-
-		targetContent, err := io.ReadAll(targetReader)
-		targetReader.Close()
-		if err != nil {
-			resp.Diagnostics.AddError("Failed to read target content", err.Error())
-			return
-		}
-
-		// Calculate checksums
-		sourceChecksum := calculateChecksum(sourceContent, checksumAlgo)
-		targetChecksum := calculateChecksum(targetContent, checksumAlgo)
-		data.SourceChecksum = types.StringValue(sourceChecksum)
-		data.TargetChecksum = types.StringValue(targetChecksum)
-
-		// Compare checksum
-		if compareChecksum {
-			checksumMatch := sourceChecksum == targetChecksum
-			data.ChecksumMatch = types.BoolValue(checksumMatch)
-			if !checksumMatch {
-				differences = append(differences, "checksum")
-				identical = false
-			}
-		} else {
-			data.ChecksumMatch = types.BoolNull()
-		}
-
-		// Compare content byte-by-byte
-		if compareContent {
-			contentMatch := bytes.Equal(sourceContent, targetContent)
-			data.ContentMatch = types.BoolValue(contentMatch)
-			if !contentMatch {
-				differences = append(differences, "content")
-				identical = false
-			}
-		} else {
-			data.ContentMatch = types.BoolNull()
-		}
-	} else {
+func (d *CompareDataSource) compareFileContent(ctx context.Context, sourceBackend, targetBackend plugin.Backend, data *CompareDataSourceModel, opts compareOptions, state *compareResultState) error {
+	if !opts.compareContent && !opts.compareChecksum {
 		data.ContentMatch = types.BoolNull()
 		data.ChecksumMatch = types.BoolNull()
 		data.SourceChecksum = types.StringNull()
 		data.TargetChecksum = types.StringNull()
+		return nil
 	}
 
-	data.Identical = types.BoolValue(identical)
+	sourceContent, err := readCompareContent(ctx, sourceBackend, data.Source.ValueString())
+	if err != nil {
+		return err
+	}
+	targetContent, err := readCompareContent(ctx, targetBackend, data.Target.ValueString())
+	if err != nil {
+		return err
+	}
 
-	diffList, diags := types.ListValueFrom(ctx, types.StringType, differences)
-	resp.Diagnostics.Append(diags...)
-	data.Differences = diffList
+	sourceChecksum := calculateChecksum(sourceContent, opts.checksumAlgo)
+	targetChecksum := calculateChecksum(targetContent, opts.checksumAlgo)
+	data.SourceChecksum = types.StringValue(sourceChecksum)
+	data.TargetChecksum = types.StringValue(targetChecksum)
 
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	if opts.compareChecksum {
+		checksumMatch := sourceChecksum == targetChecksum
+		data.ChecksumMatch = types.BoolValue(checksumMatch)
+		if !checksumMatch {
+			state.differences = append(state.differences, "checksum")
+			state.identical = false
+		}
+	} else {
+		data.ChecksumMatch = types.BoolNull()
+	}
+
+	if opts.compareContent {
+		contentMatch := bytes.Equal(sourceContent, targetContent)
+		data.ContentMatch = types.BoolValue(contentMatch)
+		if !contentMatch {
+			state.differences = append(state.differences, "content")
+			state.identical = false
+		}
+	} else {
+		data.ContentMatch = types.BoolNull()
+	}
+
+	return nil
+}
+
+func readCompareContent(ctx context.Context, backend plugin.Backend, filePath string) ([]byte, error) {
+	reader, err := backend.Read(ctx, filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
 }
 
 // getBackend returns the appropriate backend.
@@ -593,10 +622,6 @@ func (d *CompareDataSource) getBackend(ctx context.Context, backendName string) 
 func calculateChecksum(content []byte, algorithm string) string {
 	var h hash.Hash
 	switch algorithm {
-	case "md5":
-		h = md5.New()
-	case "sha1":
-		h = sha1.New()
 	case "sha256":
 		h = sha256.New()
 	case "sha512":

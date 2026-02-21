@@ -6,7 +6,6 @@ package template_file
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -258,7 +257,7 @@ The following functions are available in templates:
 				Computed:    true,
 			},
 			"md5": schema.StringAttribute{
-				Description: "MD5 checksum of the rendered content.",
+				Description: "Deprecated insecure checksum field. Always null.",
 				Computed:    true,
 			},
 			"sha256": schema.StringAttribute{
@@ -810,8 +809,7 @@ func (r *TemplateFileResource) setOwnership(ctx context.Context, backend plugin.
 
 // computeChecksums computes MD5, SHA256, and SHA512 checksums.
 func (r *TemplateFileResource) computeChecksums(data *TemplateFileResourceModel, content []byte) {
-	md5sum := md5.Sum(content)
-	data.MD5 = types.StringValue(hex.EncodeToString(md5sum[:]))
+	data.MD5 = types.StringNull()
 
 	sha256sum := sha256.Sum256(content)
 	data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))

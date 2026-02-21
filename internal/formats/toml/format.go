@@ -111,7 +111,7 @@ func (f *Format) Set(data any, path string, value any) (any, error) {
 
 // Delete deletes a value at the specified path.
 func (f *Format) Delete(data any, path string) (any, error) {
-	return delete(data, path)
+	return deletePath(data, path)
 }
 
 // Validate validates TOML data structure.
@@ -366,8 +366,8 @@ func set(data any, path string, value any) (any, error) {
 	return result, nil
 }
 
-// delete deletes a value at the specified path.
-func delete(data any, path string) (any, error) {
+// deletePath deletes a value at the specified path.
+func deletePath(data any, path string) (any, error) {
 	if path == "" || path == "." {
 		return nil, nil
 	}
@@ -400,10 +400,14 @@ func delete(data any, path string) (any, error) {
 
 	lastPart := parts[len(parts)-1]
 	if v, ok := current.(map[string]any); ok {
-		delete(v, lastPart)
+		builtinDelete(v, lastPart)
 	}
 
 	return result, nil
+}
+
+func builtinDelete(v map[string]any, key string) {
+	delete(v, key)
 }
 
 // deepCopy creates a deep copy of a value.

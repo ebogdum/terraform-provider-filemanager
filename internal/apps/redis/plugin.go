@@ -225,214 +225,282 @@ func (p *Plugin) DefaultConfig() any {
 
 // Validate validates the Redis configuration.
 func (p *Plugin) Validate(config any) ([]plugin.ValidationError, error) {
-	var errors []plugin.ValidationError
-
 	configMap, ok := config.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("config must be a map")
 	}
 
-	// Validate port
-	if port, ok := configMap["port"]; ok {
-		var portNum int
-		switch v := port.(type) {
-		case int:
-			portNum = v
-		case int64:
-			portNum = int(v)
-		case float64:
-			portNum = int(v)
-		}
-		if portNum < 0 || portNum > 65535 {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "port",
-				Message: fmt.Sprintf("invalid port number: %d (must be 0-65535)", portNum),
-			})
-		}
-	}
-
-	// Validate loglevel
-	if loglevel, ok := configMap["loglevel"].(string); ok {
-		validLevels := []string{"debug", "verbose", "notice", "warning"}
-		valid := false
-		for _, v := range validLevels {
-			if strings.EqualFold(loglevel, v) {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "loglevel",
-				Message: fmt.Sprintf("invalid loglevel: %s (must be one of: %s)", loglevel, strings.Join(validLevels, ", ")),
-			})
-		}
-	}
-
-	// Validate maxmemory-policy
-	if policy, ok := configMap["maxmemory-policy"].(string); ok {
-		validPolicies := []string{"volatile-lru", "allkeys-lru", "volatile-lfu", "allkeys-lfu", "volatile-random", "allkeys-random", "volatile-ttl", "noeviction"}
-		valid := false
-		for _, v := range validPolicies {
-			if policy == v {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "maxmemory-policy",
-				Message: fmt.Sprintf("invalid maxmemory-policy: %s", policy),
-			})
-		}
-	}
-
-	// Validate appendfsync
-	if fsync, ok := configMap["appendfsync"].(string); ok {
-		validOptions := []string{"always", "everysec", "no"}
-		valid := false
-		for _, v := range validOptions {
-			if fsync == v {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "appendfsync",
-				Message: fmt.Sprintf("invalid appendfsync: %s (must be one of: %s)", fsync, strings.Join(validOptions, ", ")),
-			})
-		}
-	}
-
-	// Validate save format
-	if saves, ok := configMap["save"]; ok {
-		var saveList []any
-		switch v := saves.(type) {
-		case []any:
-			saveList = v
-		case []string:
-			for _, s := range v {
-				saveList = append(saveList, s)
-			}
-		}
-		for i, save := range saveList {
-			saveStr, ok := save.(string)
-			if !ok {
-				continue
-			}
-			if saveStr == "" {
-				continue
-			}
-			parts := strings.Fields(saveStr)
-			if len(parts) != 2 {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("save[%d]", i),
-					Message: fmt.Sprintf("invalid save format: %s (expected 'seconds changes')", saveStr),
-				})
-			}
-		}
-	}
-
-	// Validate maxmemory format
-	if maxmem, ok := configMap["maxmemory"].(string); ok && maxmem != "" {
-		if !isValidMemorySize(maxmem) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "maxmemory",
-				Message: fmt.Sprintf("invalid maxmemory format: %s (expected: 100mb, 1gb, etc.)", maxmem),
-			})
-		}
-	}
-
+	var errors []plugin.ValidationError
+	errors = append(errors, validateRedisPort(configMap)...)
+	errors = append(errors, validateRedisLoglevel(configMap)...)
+	errors = append(errors, validateRedisMaxMemoryPolicy(configMap)...)
+	errors = append(errors, validateRedisAppendFsync(configMap)...)
+	errors = append(errors, validateRedisSaveFormat(configMap)...)
+	errors = append(errors, validateRedisMaxMemory(configMap)...)
 	return errors, nil
 }
 
 // ValidateSemantic performs Redis-specific semantic validation.
 func (p *Plugin) ValidateSemantic(config any) ([]plugin.ValidationError, error) {
-	var errors []plugin.ValidationError
-
 	configMap, ok := config.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("config must be a map")
 	}
 
-	// Check for security issues
-	if binds, ok := configMap["bind"]; ok {
-		var bindList []string
-		switch v := binds.(type) {
-		case []any:
-			for _, b := range v {
-				if s, ok := b.(string); ok {
-					bindList = append(bindList, s)
-				}
-			}
-		case []string:
-			bindList = v
-		case string:
-			bindList = []string{v}
-		}
-
-		for _, bind := range bindList {
-			if bind == "0.0.0.0" || bind == "*" {
-				// Check if password is set
-				if _, hasPass := configMap["requirepass"]; !hasPass {
-					errors = append(errors, plugin.ValidationError{
-						Path:    "bind",
-						Message: "binding to 0.0.0.0 without 'requirepass' is a security risk",
-					})
-				}
-				break
-			}
-		}
-	}
-
-	// Check cluster configuration consistency
-	if clusterEnabled, ok := configMap["cluster-enabled"].(bool); ok && clusterEnabled {
-		if _, hasConfigFile := configMap["cluster-config-file"]; !hasConfigFile {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "cluster-enabled",
-				Message: "cluster mode enabled but 'cluster-config-file' not set",
-			})
-		}
-	}
-
-	// Check persistence configuration
-	appendonly := false
-	if ao, ok := configMap["appendonly"].(bool); ok {
-		appendonly = ao
-	}
-
-	hasSave := false
-	if saves, ok := configMap["save"]; ok {
-		switch v := saves.(type) {
-		case []any:
-			hasSave = len(v) > 0
-		case []string:
-			hasSave = len(v) > 0
-		case string:
-			hasSave = v != ""
-		}
-	}
-
-	if !appendonly && !hasSave {
-		errors = append(errors, plugin.ValidationError{
-			Path:    "persistence",
-			Message: "neither AOF nor RDB persistence is enabled - data will be lost on restart",
-		})
-	}
-
-	// Check replication configuration
-	if replicaof, ok := configMap["replicaof"].(string); ok && replicaof != "" {
-		// If this is a replica, masterauth should be set if master requires password
-		if _, hasMasterAuth := configMap["masterauth"]; !hasMasterAuth {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "replicaof",
-				Message: "replica configured but 'masterauth' not set - ensure master doesn't require authentication",
-			})
-		}
-	}
-
+	var errors []plugin.ValidationError
+	errors = append(errors, validateRedisBindSecurity(configMap)...)
+	errors = append(errors, validateRedisClusterConfig(configMap)...)
+	errors = append(errors, validateRedisPersistence(configMap)...)
+	errors = append(errors, validateRedisReplication(configMap)...)
 	return errors, nil
+}
+
+func validateRedisPort(configMap map[string]any) []plugin.ValidationError {
+	portNum, ok := redisAnyToInt(configMap["port"])
+	if !ok {
+		return nil
+	}
+
+	if portNum < 0 || portNum > 65535 {
+		return []plugin.ValidationError{{
+			Path:    "port",
+			Message: fmt.Sprintf("invalid port number: %d (must be 0-65535)", portNum),
+		}}
+	}
+
+	return nil
+}
+
+func validateRedisLoglevel(configMap map[string]any) []plugin.ValidationError {
+	loglevel, ok := configMap["loglevel"].(string)
+	if !ok {
+		return nil
+	}
+
+	validLevels := []string{"debug", "verbose", "notice", "warning"}
+	if redisContainsFold(validLevels, loglevel) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "loglevel",
+		Message: fmt.Sprintf("invalid loglevel: %s (must be one of: %s)", loglevel, strings.Join(validLevels, ", ")),
+	}}
+}
+
+func validateRedisMaxMemoryPolicy(configMap map[string]any) []plugin.ValidationError {
+	policy, ok := configMap["maxmemory-policy"].(string)
+	if !ok {
+		return nil
+	}
+
+	validPolicies := []string{
+		"volatile-lru", "allkeys-lru", "volatile-lfu", "allkeys-lfu",
+		"volatile-random", "allkeys-random", "volatile-ttl", "noeviction",
+	}
+	if redisContains(validPolicies, policy) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "maxmemory-policy",
+		Message: fmt.Sprintf("invalid maxmemory-policy: %s", policy),
+	}}
+}
+
+func validateRedisAppendFsync(configMap map[string]any) []plugin.ValidationError {
+	fsync, ok := configMap["appendfsync"].(string)
+	if !ok {
+		return nil
+	}
+
+	validOptions := []string{"always", "everysec", "no"}
+	if redisContains(validOptions, fsync) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "appendfsync",
+		Message: fmt.Sprintf("invalid appendfsync: %s (must be one of: %s)", fsync, strings.Join(validOptions, ", ")),
+	}}
+}
+
+func validateRedisSaveFormat(configMap map[string]any) []plugin.ValidationError {
+	saveList := redisSaveList(configMap["save"])
+	if len(saveList) == 0 {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for i, save := range saveList {
+		if save == "" {
+			continue
+		}
+
+		if len(strings.Fields(save)) != 2 {
+			errors = append(errors, plugin.ValidationError{
+				Path:    fmt.Sprintf("save[%d]", i),
+				Message: fmt.Sprintf("invalid save format: %s (expected 'seconds changes')", save),
+			})
+		}
+	}
+	return errors
+}
+
+func validateRedisMaxMemory(configMap map[string]any) []plugin.ValidationError {
+	maxmem, ok := configMap["maxmemory"].(string)
+	if !ok || maxmem == "" {
+		return nil
+	}
+
+	if isValidMemorySize(maxmem) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "maxmemory",
+		Message: fmt.Sprintf("invalid maxmemory format: %s (expected: 100mb, 1gb, etc.)", maxmem),
+	}}
+}
+
+func validateRedisBindSecurity(configMap map[string]any) []plugin.ValidationError {
+	binds := redisBindList(configMap["bind"])
+	if !redisContains(binds, "0.0.0.0") && !redisContains(binds, "*") {
+		return nil
+	}
+
+	if _, hasPass := configMap["requirepass"]; hasPass {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "bind",
+		Message: "binding to 0.0.0.0 without 'requirepass' is a security risk",
+	}}
+}
+
+func validateRedisClusterConfig(configMap map[string]any) []plugin.ValidationError {
+	clusterEnabled, ok := configMap["cluster-enabled"].(bool)
+	if !ok || !clusterEnabled {
+		return nil
+	}
+
+	if _, hasConfigFile := configMap["cluster-config-file"]; hasConfigFile {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "cluster-enabled",
+		Message: "cluster mode enabled but 'cluster-config-file' not set",
+	}}
+}
+
+func validateRedisPersistence(configMap map[string]any) []plugin.ValidationError {
+	appendOnly, _ := configMap["appendonly"].(bool)
+	if appendOnly || redisHasSave(configMap["save"]) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "persistence",
+		Message: "neither AOF nor RDB persistence is enabled - data will be lost on restart",
+	}}
+}
+
+func validateRedisReplication(configMap map[string]any) []plugin.ValidationError {
+	replicaof, _ := configMap["replicaof"].(string)
+	if replicaof == "" {
+		return nil
+	}
+
+	if _, hasMasterAuth := configMap["masterauth"]; hasMasterAuth {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "replicaof",
+		Message: "replica configured but 'masterauth' not set - ensure master doesn't require authentication",
+	}}
+}
+
+func redisAnyToInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
+func redisContainsFold(values []string, candidate string) bool {
+	for _, v := range values {
+		if strings.EqualFold(v, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func redisContains(values []string, candidate string) bool {
+	for _, v := range values {
+		if v == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func redisSaveList(v any) []string {
+	switch saves := v.(type) {
+	case []any:
+		result := make([]string, 0, len(saves))
+		for _, item := range saves {
+			if saveStr, ok := item.(string); ok {
+				result = append(result, saveStr)
+			}
+		}
+		return result
+	case []string:
+		return saves
+	default:
+		return nil
+	}
+}
+
+func redisBindList(v any) []string {
+	switch binds := v.(type) {
+	case []any:
+		result := make([]string, 0, len(binds))
+		for _, item := range binds {
+			if bind, ok := item.(string); ok {
+				result = append(result, bind)
+			}
+		}
+		return result
+	case []string:
+		return binds
+	case string:
+		return []string{binds}
+	default:
+		return nil
+	}
+}
+
+func redisHasSave(v any) bool {
+	switch saves := v.(type) {
+	case []any:
+		return len(saves) > 0
+	case []string:
+		return len(saves) > 0
+	case string:
+		return saves != ""
+	default:
+		return false
+	}
 }
 
 // isValidMemorySize checks if a string is a valid Redis memory size.

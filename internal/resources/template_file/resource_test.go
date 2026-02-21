@@ -424,11 +424,10 @@ func TestComputeChecksums(t *testing.T) {
 	r.computeChecksums(data, content)
 
 	// Known checksums for "hello world"
-	expectedMD5 := "5eb63bbbe01eeed093cb22bb8f5acdc3"
 	expectedSHA256 := "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
 
-	if data.MD5.ValueString() != expectedMD5 {
-		t.Errorf("MD5: got %q, want %q", data.MD5.ValueString(), expectedMD5)
+	if !data.MD5.IsNull() {
+		t.Errorf("MD5: got %q, want null", data.MD5.ValueString())
 	}
 
 	if data.SHA256.ValueString() != expectedSHA256 {
@@ -464,7 +463,7 @@ func TestRenderTemplateFromFile(t *testing.T) {
 	templatePath := filepath.Join(tmpDir, "test.tpl")
 
 	templateContent := `Hello, {{ .name }}!`
-	if err := os.WriteFile(templatePath, []byte(templateContent), 0644); err != nil {
+	if err := os.WriteFile(templatePath, []byte(templateContent), 0600); err != nil {
 		t.Fatalf("failed to write template file: %v", err)
 	}
 
@@ -492,7 +491,7 @@ func TestRenderTemplateWithSourceAttribute(t *testing.T) {
         proxy_pass http://{{ .upstream }};
     }
 }`
-	if err := os.WriteFile(templatePath, []byte(templateContent), 0644); err != nil {
+	if err := os.WriteFile(templatePath, []byte(templateContent), 0600); err != nil {
 		t.Fatalf("failed to write template file: %v", err)
 	}
 

@@ -388,118 +388,143 @@ func (r *B2OperationResource) performOperation(ctx context.Context, data *B2Oper
 	// Handle operation-specific logic
 	switch operation {
 	case "head", "get_file_info":
-		if isB2 {
-			b2Info, err := b2Back.GetFileInfo(ctx, data.FilePath.ValueString())
-			if err != nil {
-				return nil, fmt.Errorf("failed to get file info: %w", err)
-			}
-			result.fileID = b2Info.FileID
-			result.fileName = b2Info.Name
-			result.contentLength = b2Info.Size
-			result.contentType = b2Info.ContentType
-			if result.contentType == "" {
-				result.contentType = "application/octet-stream"
-			}
-			result.contentSHA1 = b2Info.SHA256
-			result.contentMD5 = b2Info.MD5
-			result.uploadTimestamp = b2Info.UploadTimestamp
-			result.action = b2Info.Action
-			if result.action == "" {
-				result.action = "upload"
-			}
-			result.legalHoldStatus = b2Info.LegalHold
-			if b2Info.Metadata != nil {
-				for k, v := range b2Info.Metadata {
-					result.fileInfo[k] = v
-				}
-			}
-		} else {
-			// Fall back to generic Stat
-			info, err := backend.Stat(ctx, data.FilePath.ValueString())
-			if err != nil {
-				return nil, fmt.Errorf("failed to stat file: %w", err)
-			}
-			r.populateResultFromFileInfo(result, info, data)
-		}
+		err = r.handleB2HeadOrInfo(ctx, backend, b2Back, isB2, data, result)
 
 	case "copy":
-		if isB2 {
-			if err := b2Back.CopyFile(ctx, data.FilePath.ValueString(), data.DestinationPath.ValueString()); err != nil {
-				return nil, fmt.Errorf("copy failed: %w", err)
-			}
-			tflog.Info(ctx, "B2 copy operation completed", map[string]any{
-				"source":      data.FilePath.ValueString(),
-				"destination": data.DestinationPath.ValueString(),
-			})
-		} else {
-			return nil, fmt.Errorf("backend does not support B2 copy operations")
-		}
-		// Refresh file info after copy
-		info, err := backend.Stat(ctx, data.FilePath.ValueString())
-		if err != nil {
-			return nil, fmt.Errorf("failed to stat file: %w", err)
-		}
-		r.populateResultFromFileInfo(result, info, data)
+		err = r.handleB2Copy(ctx, backend, b2Back, isB2, data, result)
 
 	case "update_file_info":
-		// Note: B2 doesn't support updating file info directly - would need to re-upload
-		// For now, we just read the current info and merge our desired values
-		info, err := backend.Stat(ctx, data.FilePath.ValueString())
-		if err != nil {
-			return nil, fmt.Errorf("failed to stat file: %w", err)
-		}
-		r.populateResultFromFileInfo(result, info, data)
-		// Merge provided file_info into result
-		elements := data.FileInfo.Elements()
-		for k, v := range elements {
-			if strVal, ok := v.(types.String); ok {
-				result.fileInfo[k] = strVal.ValueString()
-			}
-		}
-		tflog.Info(ctx, "B2 update_file_info operation (read-only - B2 doesn't support direct metadata update)", map[string]any{
-			"file_path": data.FilePath.ValueString(),
-		})
+		err = r.handleB2UpdateFileInfo(ctx, backend, data, result)
 
 	case "hide":
-		if isB2 {
-			if err := b2Back.HideFile(ctx, data.FilePath.ValueString()); err != nil {
-				return nil, fmt.Errorf("hide failed: %w", err)
-			}
-			tflog.Info(ctx, "B2 hide operation completed", map[string]any{
-				"file_path": data.FilePath.ValueString(),
-			})
-		} else {
-			return nil, fmt.Errorf("backend does not support B2 hide operations")
-		}
-		result.action = "hide"
-		result.fileName = data.FilePath.ValueString()
+		err = r.handleB2Hide(ctx, b2Back, isB2, data, result)
 
 	case "update_legal_hold":
-		if isB2 {
-			if err := b2Back.UpdateFileLegalHold(ctx, data.FilePath.ValueString(), data.LegalHold.ValueBool()); err != nil {
-				// Log warning but don't fail - not all B2 buckets support legal hold
-				tflog.Warn(ctx, "B2 update_legal_hold operation may not be supported by this bucket", map[string]any{
-					"file_path":  data.FilePath.ValueString(),
-					"legal_hold": data.LegalHold.ValueBool(),
-					"error":      err.Error(),
-				})
-			} else {
-				tflog.Info(ctx, "B2 update_legal_hold operation completed", map[string]any{
-					"file_path":  data.FilePath.ValueString(),
-					"legal_hold": data.LegalHold.ValueBool(),
-				})
-			}
-		}
-		result.legalHoldStatus = data.LegalHold.ValueBool()
-		// Refresh file info
-		info, err := backend.Stat(ctx, data.FilePath.ValueString())
-		if err != nil {
-			return nil, fmt.Errorf("failed to stat file: %w", err)
-		}
-		r.populateResultFromFileInfo(result, info, data)
+		err = r.handleB2UpdateLegalHold(ctx, backend, b2Back, isB2, data, result)
+	}
+
+	if err != nil {
+		return nil, err
 	}
 
 	return result, nil
+}
+
+func (r *B2OperationResource) handleB2HeadOrInfo(ctx context.Context, backend plugin.Backend, b2Back b2backend.B2Backend, isB2 bool, data *B2OperationResourceModel, result *b2OperationResult) error {
+	if isB2 {
+		b2Info, err := b2Back.GetFileInfo(ctx, data.FilePath.ValueString())
+		if err != nil {
+			return fmt.Errorf("failed to get file info: %w", err)
+		}
+		populateResultFromB2Info(result, b2Info)
+		return nil
+	}
+
+	info, err := backend.Stat(ctx, data.FilePath.ValueString())
+	if err != nil {
+		return fmt.Errorf("failed to stat file: %w", err)
+	}
+	r.populateResultFromFileInfo(result, info, data)
+	return nil
+}
+
+func populateResultFromB2Info(result *b2OperationResult, b2Info *b2backend.B2FileInfo) {
+	result.fileID = b2Info.FileID
+	result.fileName = b2Info.Name
+	result.contentLength = b2Info.Size
+	result.contentType = b2Info.ContentType
+	if result.contentType == "" {
+		result.contentType = "application/octet-stream"
+	}
+	result.contentSHA1 = b2Info.SHA256
+	result.contentMD5 = b2Info.MD5
+	result.uploadTimestamp = b2Info.UploadTimestamp
+	result.action = b2Info.Action
+	if result.action == "" {
+		result.action = "upload"
+	}
+	result.legalHoldStatus = b2Info.LegalHold
+	for k, v := range b2Info.Metadata {
+		result.fileInfo[k] = v
+	}
+}
+
+func (r *B2OperationResource) handleB2Copy(ctx context.Context, backend plugin.Backend, b2Back b2backend.B2Backend, isB2 bool, data *B2OperationResourceModel, result *b2OperationResult) error {
+	if !isB2 {
+		return fmt.Errorf("backend does not support B2 copy operations")
+	}
+	if err := b2Back.CopyFile(ctx, data.FilePath.ValueString(), data.DestinationPath.ValueString()); err != nil {
+		return fmt.Errorf("copy failed: %w", err)
+	}
+	tflog.Info(ctx, "B2 copy operation completed", map[string]any{
+		"source":      data.FilePath.ValueString(),
+		"destination": data.DestinationPath.ValueString(),
+	})
+
+	info, err := backend.Stat(ctx, data.FilePath.ValueString())
+	if err != nil {
+		return fmt.Errorf("failed to stat file: %w", err)
+	}
+	r.populateResultFromFileInfo(result, info, data)
+	return nil
+}
+
+func (r *B2OperationResource) handleB2UpdateFileInfo(ctx context.Context, backend plugin.Backend, data *B2OperationResourceModel, result *b2OperationResult) error {
+	info, err := backend.Stat(ctx, data.FilePath.ValueString())
+	if err != nil {
+		return fmt.Errorf("failed to stat file: %w", err)
+	}
+	r.populateResultFromFileInfo(result, info, data)
+	for k, v := range data.FileInfo.Elements() {
+		if strVal, ok := v.(types.String); ok {
+			result.fileInfo[k] = strVal.ValueString()
+		}
+	}
+	tflog.Info(ctx, "B2 update_file_info operation (read-only - B2 doesn't support direct metadata update)", map[string]any{
+		"file_path": data.FilePath.ValueString(),
+	})
+	return nil
+}
+
+func (r *B2OperationResource) handleB2Hide(ctx context.Context, b2Back b2backend.B2Backend, isB2 bool, data *B2OperationResourceModel, result *b2OperationResult) error {
+	if !isB2 {
+		return fmt.Errorf("backend does not support B2 hide operations")
+	}
+	if err := b2Back.HideFile(ctx, data.FilePath.ValueString()); err != nil {
+		return fmt.Errorf("hide failed: %w", err)
+	}
+	tflog.Info(ctx, "B2 hide operation completed", map[string]any{
+		"file_path": data.FilePath.ValueString(),
+	})
+	result.action = "hide"
+	result.fileName = data.FilePath.ValueString()
+	return nil
+}
+
+func (r *B2OperationResource) handleB2UpdateLegalHold(ctx context.Context, backend plugin.Backend, b2Back b2backend.B2Backend, isB2 bool, data *B2OperationResourceModel, result *b2OperationResult) error {
+	if isB2 {
+		err := b2Back.UpdateFileLegalHold(ctx, data.FilePath.ValueString(), data.LegalHold.ValueBool())
+		if err != nil {
+			tflog.Warn(ctx, "B2 update_legal_hold operation may not be supported by this bucket", map[string]any{
+				"file_path":  data.FilePath.ValueString(),
+				"legal_hold": data.LegalHold.ValueBool(),
+				"error":      err.Error(),
+			})
+		} else {
+			tflog.Info(ctx, "B2 update_legal_hold operation completed", map[string]any{
+				"file_path":  data.FilePath.ValueString(),
+				"legal_hold": data.LegalHold.ValueBool(),
+			})
+		}
+	}
+
+	result.legalHoldStatus = data.LegalHold.ValueBool()
+	info, err := backend.Stat(ctx, data.FilePath.ValueString())
+	if err != nil {
+		return fmt.Errorf("failed to stat file: %w", err)
+	}
+	r.populateResultFromFileInfo(result, info, data)
+	return nil
 }
 
 // populateResultFromFileInfo populates the result from generic FileInfo.

@@ -159,9 +159,9 @@ func (b *Backend) buildSSHConfig(config plugin.BackendConfig) (*ssh.ClientConfig
 
 // buildHostKeyCallback builds a host key callback based on configuration.
 func (b *Backend) buildHostKeyCallback(config plugin.BackendConfig) (ssh.HostKeyCallback, error) {
-	// Check for insecure mode (must be explicitly enabled)
+	// Insecure host key bypass is intentionally unsupported.
 	if insecure, ok := config.Extra["insecure_skip_host_key_verification"].(bool); ok && insecure {
-		return ssh.InsecureIgnoreHostKey(), nil
+		return nil, fmt.Errorf("insecure_skip_host_key_verification is not supported")
 	}
 
 	// Check for explicit host key
@@ -457,110 +457,94 @@ func (b *Backend) List(ctx context.Context, dirPath string, opts plugin.ListOpti
 		return nil, plugin.ErrNotADirectory
 	}
 
-	var results []plugin.FileInfo
-
 	if opts.Recursive {
-		walker := b.sftpClient.Walk(absPath)
-		for walker.Step() {
-			if err := walker.Err(); err != nil {
-				continue
-			}
-
-			walkPath := walker.Path()
-			info := walker.Stat()
-
-			// Skip hidden files if not included
-			if !opts.IncludeHidden && strings.HasPrefix(info.Name(), ".") {
-				if info.IsDir() {
-					walker.SkipDir()
-				}
-				continue
-			}
-
-			// Apply pattern filter
-			if opts.Pattern != "" {
-				matched, err := path.Match(opts.Pattern, info.Name())
-				if err != nil || !matched {
-					continue
-				}
-			}
-
-			fileInfo := plugin.FileInfo{
-				Name:    info.Name(),
-				Path:    walkPath,
-				Size:    info.Size(),
-				Mode:    info.Mode(),
-				ModTime: info.ModTime(),
-				IsDir:   info.IsDir(),
-			}
-
-			// Try to get Unix-specific info
-			if sys := info.Sys(); sys != nil {
-				if stat, ok := sys.(*sftp.FileStat); ok {
-					fileInfo.UID = int(stat.UID)
-					fileInfo.GID = int(stat.GID)
-				}
-			}
-
-			results = append(results, fileInfo)
-
-			// Check max results
-			if opts.MaxResults > 0 && len(results) >= opts.MaxResults {
-				break
-			}
-		}
-	} else {
-		entries, err := b.sftpClient.ReadDir(absPath)
-		if err != nil {
-			return nil, err
-		}
-
-		for i, entry := range entries {
-			// Apply offset
-			if opts.Offset > 0 && i < opts.Offset {
-				continue
-			}
-
-			// Skip hidden files if not included
-			if !opts.IncludeHidden && strings.HasPrefix(entry.Name(), ".") {
-				continue
-			}
-
-			// Apply pattern filter
-			if opts.Pattern != "" {
-				matched, err := path.Match(opts.Pattern, entry.Name())
-				if err != nil || !matched {
-					continue
-				}
-			}
-
-			fileInfo := plugin.FileInfo{
-				Name:    entry.Name(),
-				Path:    path.Join(absPath, entry.Name()),
-				Size:    entry.Size(),
-				Mode:    entry.Mode(),
-				ModTime: entry.ModTime(),
-				IsDir:   entry.IsDir(),
-			}
-
-			// Try to get Unix-specific info
-			if sys := entry.Sys(); sys != nil {
-				if stat, ok := sys.(*sftp.FileStat); ok {
-					fileInfo.UID = int(stat.UID)
-					fileInfo.GID = int(stat.GID)
-				}
-			}
-
-			results = append(results, fileInfo)
-
-			// Check max results
-			if opts.MaxResults > 0 && len(results) >= opts.MaxResults {
-				break
-			}
-		}
+		return b.listRecursive(absPath, opts)
 	}
 
+	return b.listShallow(absPath, opts)
+}
+
+func (b *Backend) listRecursive(absPath string, opts plugin.ListOptions) ([]plugin.FileInfo, error) {
+	results := make([]plugin.FileInfo, 0)
+	walker := b.sftpClient.Walk(absPath)
+	for walker.Step() {
+		if err := walker.Err(); err != nil {
+			continue
+		}
+
+		info := walker.Stat()
+		if shouldSkipSSHHidden(info.Name(), opts.IncludeHidden) {
+			if info.IsDir() {
+				walker.SkipDir()
+			}
+			continue
+		}
+		if !matchesSSHPattern(info.Name(), opts.Pattern) {
+			continue
+		}
+
+		results = append(results, toSSHFileInfo(walker.Path(), info))
+		if opts.MaxResults > 0 && len(results) >= opts.MaxResults {
+			break
+		}
+	}
 	return results, nil
+}
+
+func (b *Backend) listShallow(absPath string, opts plugin.ListOptions) ([]plugin.FileInfo, error) {
+	entries, err := b.sftpClient.ReadDir(absPath)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]plugin.FileInfo, 0, len(entries))
+	for i, entry := range entries {
+		if opts.Offset > 0 && i < opts.Offset {
+			continue
+		}
+		if shouldSkipSSHHidden(entry.Name(), opts.IncludeHidden) {
+			continue
+		}
+		if !matchesSSHPattern(entry.Name(), opts.Pattern) {
+			continue
+		}
+
+		results = append(results, toSSHFileInfo(path.Join(absPath, entry.Name()), entry))
+		if opts.MaxResults > 0 && len(results) >= opts.MaxResults {
+			break
+		}
+	}
+	return results, nil
+}
+
+func shouldSkipSSHHidden(name string, includeHidden bool) bool {
+	return !includeHidden && strings.HasPrefix(name, ".")
+}
+
+func matchesSSHPattern(name, pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+	matched, err := path.Match(pattern, name)
+	return err == nil && matched
+}
+
+func toSSHFileInfo(filePath string, info os.FileInfo) plugin.FileInfo {
+	fileInfo := plugin.FileInfo{
+		Name:    info.Name(),
+		Path:    filePath,
+		Size:    info.Size(),
+		Mode:    info.Mode(),
+		ModTime: info.ModTime(),
+		IsDir:   info.IsDir(),
+	}
+	if sys := info.Sys(); sys != nil {
+		if stat, ok := sys.(*sftp.FileStat); ok {
+			fileInfo.UID = int(stat.UID)
+			fileInfo.GID = int(stat.GID)
+		}
+	}
+	return fileInfo
 }
 
 // Mkdir creates a directory.

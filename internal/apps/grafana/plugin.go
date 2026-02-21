@@ -418,61 +418,67 @@ func (p *Plugin) validateTemplating(templating map[string]any) []plugin.Validati
 		usedNames := make(map[string]bool)
 
 		for i, variable := range list {
-			varMap, ok := variable.(map[string]any)
-			if !ok {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("templating.list[%d]", i),
-					Message: "variable must be an object",
-				})
-				continue
-			}
-
-			// Validate name
-			name, ok := varMap["name"].(string)
-			if !ok || name == "" {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("templating.list[%d].name", i),
-					Message: "variable name is required",
-				})
-			} else {
-				if usedNames[name] {
-					errors = append(errors, plugin.ValidationError{
-						Path:    fmt.Sprintf("templating.list[%d].name", i),
-						Message: fmt.Sprintf("duplicate variable name: %s", name),
-					})
-				}
-				usedNames[name] = true
-
-				// Validate name format
-				if !isValidVariableName(name) {
-					errors = append(errors, plugin.ValidationError{
-						Path:    fmt.Sprintf("templating.list[%d].name", i),
-						Message: "variable name must contain only alphanumeric characters and underscores",
-					})
-				}
-			}
-
-			// Validate type
-			if varType, ok := varMap["type"].(string); ok {
-				validTypes := []string{"query", "interval", "datasource", "custom", "constant", "textbox", "adhoc"}
-				found := false
-				for _, vt := range validTypes {
-					if varType == vt {
-						found = true
-						break
-					}
-				}
-				if !found {
-					errors = append(errors, plugin.ValidationError{
-						Path:    fmt.Sprintf("templating.list[%d].type", i),
-						Message: fmt.Sprintf("invalid variable type: %s", varType),
-					})
-				}
-			}
+			errors = append(errors, validateTemplatingVariable(variable, i, usedNames)...)
 		}
 	}
 
 	return errors
+}
+
+func validateTemplatingVariable(variable any, index int, usedNames map[string]bool) []plugin.ValidationError {
+	varMap, ok := variable.(map[string]any)
+	if !ok {
+		return []plugin.ValidationError{{
+			Path:    fmt.Sprintf("templating.list[%d]", index),
+			Message: "variable must be an object",
+		}}
+	}
+
+	errors := make([]plugin.ValidationError, 0)
+	name, ok := varMap["name"].(string)
+	errors = append(errors, validateTemplatingVariableName(index, name, ok, usedNames)...)
+	errors = append(errors, validateTemplatingVariableType(varMap, index)...)
+	return errors
+}
+
+func validateTemplatingVariableName(index int, name string, ok bool, usedNames map[string]bool) []plugin.ValidationError {
+	if !ok || name == "" {
+		return []plugin.ValidationError{{
+			Path:    fmt.Sprintf("templating.list[%d].name", index),
+			Message: "variable name is required",
+		}}
+	}
+
+	errors := make([]plugin.ValidationError, 0)
+	if usedNames[name] {
+		errors = append(errors, plugin.ValidationError{
+			Path:    fmt.Sprintf("templating.list[%d].name", index),
+			Message: fmt.Sprintf("duplicate variable name: %s", name),
+		})
+	}
+	usedNames[name] = true
+
+	if !isValidVariableName(name) {
+		errors = append(errors, plugin.ValidationError{
+			Path:    fmt.Sprintf("templating.list[%d].name", index),
+			Message: "variable name must contain only alphanumeric characters and underscores",
+		})
+	}
+	return errors
+}
+
+func validateTemplatingVariableType(varMap map[string]any, index int) []plugin.ValidationError {
+	varType, ok := varMap["type"].(string)
+	if !ok {
+		return nil
+	}
+	if isValidString(varType, []string{"query", "interval", "datasource", "custom", "constant", "textbox", "adhoc"}) {
+		return nil
+	}
+	return []plugin.ValidationError{{
+		Path:    fmt.Sprintf("templating.list[%d].type", index),
+		Message: fmt.Sprintf("invalid variable type: %s", varType),
+	}}
 }
 
 func (p *Plugin) validateTimeRange(timeRange map[string]any) []plugin.ValidationError {
@@ -510,54 +516,71 @@ func (p *Plugin) ValidateSemantic(config any) ([]plugin.ValidationError, error) 
 		return nil, fmt.Errorf("config must be a map")
 	}
 
-	// Check for empty dashboard
+	errors = append(errors, validateEmptyDashboard(configMap)...)
+	errors = append(errors, validateDashboardUID(configMap)...)
+	errors = append(errors, validatePanelDatasources(configMap)...)
+	return errors, nil
+}
+
+func validateEmptyDashboard(configMap map[string]any) []plugin.ValidationError {
 	if panels, ok := configMap["panels"].([]any); ok && len(panels) == 0 {
-		errors = append(errors, plugin.ValidationError{
-			Path:    "panels",
-			Message: "dashboard has no panels",
-		})
+		return []plugin.ValidationError{{Path: "panels", Message: "dashboard has no panels"}}
 	}
+	return nil
+}
 
-	// Check for missing uid
-	if _, ok := configMap["uid"]; !ok {
-		errors = append(errors, plugin.ValidationError{
-			Path:    "uid",
-			Message: "uid is recommended for dashboard identification",
-		})
+func validateDashboardUID(configMap map[string]any) []plugin.ValidationError {
+	if _, ok := configMap["uid"]; ok {
+		return nil
 	}
+	return []plugin.ValidationError{{Path: "uid", Message: "uid is recommended for dashboard identification"}}
+}
 
-	// Check for panels without datasource
-	if panels, ok := configMap["panels"].([]any); ok {
-		for i, panel := range panels {
-			panelMap, ok := panel.(map[string]any)
-			if !ok {
-				continue
-			}
+func validatePanelDatasources(configMap map[string]any) []plugin.ValidationError {
+	panels, ok := configMap["panels"].([]any)
+	if !ok {
+		return nil
+	}
+	var errors []plugin.ValidationError
+	for i, panel := range panels {
+		panelMap, ok := panel.(map[string]any)
+		if !ok {
+			continue
+		}
+		errors = append(errors, validatePanelTargetsDatasource(panelMap, i)...)
+	}
+	return errors
+}
 
-			// Check if panel has targets but no datasource
-			if targets, ok := panelMap["targets"].([]any); ok && len(targets) > 0 {
-				hasGlobalDatasource := false
-				if _, ok := panelMap["datasource"]; ok {
-					hasGlobalDatasource = true
-				}
-
-				for j, target := range targets {
-					targetMap, ok := target.(map[string]any)
-					if !ok {
-						continue
-					}
-					if _, ok := targetMap["datasource"]; !ok && !hasGlobalDatasource {
-						errors = append(errors, plugin.ValidationError{
-							Path:    fmt.Sprintf("panels[%d].targets[%d]", i, j),
-							Message: "target has no datasource specified",
-						})
-					}
-				}
-			}
+func validatePanelTargetsDatasource(panelMap map[string]any, panelIndex int) []plugin.ValidationError {
+	targets, ok := panelMap["targets"].([]any)
+	if !ok || len(targets) == 0 {
+		return nil
+	}
+	_, hasGlobalDatasource := panelMap["datasource"]
+	var errors []plugin.ValidationError
+	for j, target := range targets {
+		targetMap, ok := target.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := targetMap["datasource"]; !ok && !hasGlobalDatasource {
+			errors = append(errors, plugin.ValidationError{
+				Path:    fmt.Sprintf("panels[%d].targets[%d]", panelIndex, j),
+				Message: "target has no datasource specified",
+			})
 		}
 	}
+	return errors
+}
 
-	return errors, nil
+func isValidString(value string, allowed []string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 // Normalize normalizes the configuration.

@@ -290,112 +290,138 @@ func (p *Plugin) Validate(config any) ([]plugin.ValidationError, error) {
 
 // ValidateSemantic performs Consul-specific semantic validation.
 func (p *Plugin) ValidateSemantic(config any) ([]plugin.ValidationError, error) {
-	var errors []plugin.ValidationError
-
 	configMap, ok := config.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("config must be a map")
 	}
 
-	isServer := false
-	if server, ok := configMap["server"].(bool); ok {
-		isServer = server
-	}
+	isServer := consulServerMode(configMap)
 
-	// Server-specific validations
-	if isServer {
-		// Server should have bootstrap or bootstrap_expect
-		hasBootstrap := false
-		if bootstrap, ok := configMap["bootstrap"].(bool); ok && bootstrap {
-			hasBootstrap = true
-		}
-		if bootstrapExpect, ok := configMap["bootstrap_expect"]; ok {
-			var be int
-			switch v := bootstrapExpect.(type) {
-			case int:
-				be = v
-			case int64:
-				be = int(v)
-			case float64:
-				be = int(v)
-			}
-			if be > 0 {
-				hasBootstrap = true
-			}
-		}
-		if !hasBootstrap {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "server",
-				Message: "server mode requires either 'bootstrap: true' or 'bootstrap_expect' to be set",
-			})
-		}
-	}
-
-	// Validate retry_join addresses
-	if retryJoin, ok := configMap["retry_join"].([]any); ok {
-		for i, addr := range retryJoin {
-			addrStr, ok := addr.(string)
-			if !ok {
-				continue
-			}
-			if err := validateJoinAddress(addrStr); err != nil {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("retry_join[%d]", i),
-					Message: err.Error(),
-				})
-			}
-		}
-	}
-
-	// Validate bind_addr
-	if bindAddr, ok := configMap["bind_addr"].(string); ok {
-		if err := validateAddress(bindAddr); err != nil {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "bind_addr",
-				Message: err.Error(),
-			})
-		}
-	}
-
-	// Validate client_addr
-	if clientAddr, ok := configMap["client_addr"].(string); ok {
-		if err := validateAddress(clientAddr); err != nil {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "client_addr",
-				Message: err.Error(),
-			})
-		}
-	}
-
-	// ACL validations
-	if acl, ok := configMap["acl"].(map[string]any); ok {
-		if enabled, ok := acl["enabled"].(bool); ok && enabled {
-			// If ACLs are enabled, default_policy should be set
-			if _, ok := acl["default_policy"]; !ok {
-				errors = append(errors, plugin.ValidationError{
-					Path:    "acl",
-					Message: "when ACLs are enabled, 'default_policy' should be explicitly set",
-				})
-			}
-		}
-	}
-
-	// Connect validations
-	if connect, ok := configMap["connect"].(map[string]any); ok {
-		if enabled, ok := connect["enabled"].(bool); ok && enabled {
-			// Connect requires server mode or client with configured servers
-			if !isServer {
-				if _, hasRetryJoin := configMap["retry_join"]; !hasRetryJoin {
-					errors = append(errors, plugin.ValidationError{
-						Path:    "connect",
-						Message: "Connect enabled on client requires 'retry_join' to connect to servers",
-					})
-				}
-			}
-		}
-	}
-
+	var errors []plugin.ValidationError
+	errors = append(errors, p.validateServerBootstrap(configMap, isServer)...)
+	errors = append(errors, validateRetryJoinAddresses(configMap)...)
+	errors = append(errors, validateConsulAddressField(configMap, "bind_addr")...)
+	errors = append(errors, validateConsulAddressField(configMap, "client_addr")...)
+	errors = append(errors, validateACLDefaults(configMap)...)
+	errors = append(errors, validateConnectClientJoin(configMap, isServer)...)
 	return errors, nil
+}
+
+func consulServerMode(configMap map[string]any) bool {
+	server, ok := configMap["server"].(bool)
+	return ok && server
+}
+
+func (p *Plugin) validateServerBootstrap(configMap map[string]any, isServer bool) []plugin.ValidationError {
+	if !isServer || consulHasBootstrap(configMap) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "server",
+		Message: "server mode requires either 'bootstrap: true' or 'bootstrap_expect' to be set",
+	}}
+}
+
+func consulHasBootstrap(configMap map[string]any) bool {
+	if bootstrap, ok := configMap["bootstrap"].(bool); ok && bootstrap {
+		return true
+	}
+	return consulAnyToInt(configMap["bootstrap_expect"]) > 0
+}
+
+func validateRetryJoinAddresses(configMap map[string]any) []plugin.ValidationError {
+	retryJoin, ok := configMap["retry_join"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for i, addr := range retryJoin {
+		addrStr, ok := addr.(string)
+		if !ok {
+			continue
+		}
+
+		if err := validateJoinAddress(addrStr); err != nil {
+			errors = append(errors, plugin.ValidationError{
+				Path:    fmt.Sprintf("retry_join[%d]", i),
+				Message: err.Error(),
+			})
+		}
+	}
+	return errors
+}
+
+func validateConsulAddressField(configMap map[string]any, field string) []plugin.ValidationError {
+	addr, ok := configMap[field].(string)
+	if !ok {
+		return nil
+	}
+
+	if err := validateAddress(addr); err != nil {
+		return []plugin.ValidationError{{
+			Path:    field,
+			Message: err.Error(),
+		}}
+	}
+
+	return nil
+}
+
+func validateACLDefaults(configMap map[string]any) []plugin.ValidationError {
+	acl, ok := configMap["acl"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	enabled, ok := acl["enabled"].(bool)
+	if !ok || !enabled {
+		return nil
+	}
+
+	if _, hasDefault := acl["default_policy"]; hasDefault {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "acl",
+		Message: "when ACLs are enabled, 'default_policy' should be explicitly set",
+	}}
+}
+
+func validateConnectClientJoin(configMap map[string]any, isServer bool) []plugin.ValidationError {
+	connect, ok := configMap["connect"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	enabled, ok := connect["enabled"].(bool)
+	if !ok || !enabled || isServer {
+		return nil
+	}
+
+	if _, hasRetryJoin := configMap["retry_join"]; hasRetryJoin {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "connect",
+		Message: "Connect enabled on client requires 'retry_join' to connect to servers",
+	}}
+}
+
+func consulAnyToInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
 }
 
 // validateJoinAddress validates a retry_join address.

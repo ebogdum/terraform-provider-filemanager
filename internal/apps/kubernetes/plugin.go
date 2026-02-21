@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -356,25 +357,23 @@ func (p *Plugin) validateKindSpecific(kind string, config map[string]any) []plug
 }
 
 func (p *Plugin) validateWorkload(kind string, config map[string]any) []plugin.ValidationError {
-	var errors []plugin.ValidationError
-
 	spec, ok := config["spec"].(map[string]any)
 	if !ok {
 		return []plugin.ValidationError{{Path: "spec", Message: "spec is required for " + kind}}
 	}
 
-	// Validate selector
-	selector, ok := spec["selector"].(map[string]any)
-	if !ok {
+	var errors []plugin.ValidationError
+
+	selector, hasSelector := spec["selector"].(map[string]any)
+	if !hasSelector {
 		errors = append(errors, plugin.ValidationError{
 			Path:    "spec.selector",
 			Message: "selector is required",
 		})
 	}
 
-	// Validate template
-	template, ok := spec["template"].(map[string]any)
-	if !ok {
+	template, hasTemplate := spec["template"].(map[string]any)
+	if !hasTemplate {
 		errors = append(errors, plugin.ValidationError{
 			Path:    "spec.template",
 			Message: "template is required",
@@ -382,72 +381,11 @@ func (p *Plugin) validateWorkload(kind string, config map[string]any) []plugin.V
 		return errors
 	}
 
-	// Validate selector matches template labels
-	if selector != nil && template != nil {
-		if matchLabels, ok := selector["matchLabels"].(map[string]any); ok {
-			if templateMeta, ok := template["metadata"].(map[string]any); ok {
-				if templateLabels, ok := templateMeta["labels"].(map[string]any); ok {
-					for k, v := range matchLabels {
-						if tVal, exists := templateLabels[k]; !exists || fmt.Sprintf("%v", tVal) != fmt.Sprintf("%v", v) {
-							errors = append(errors, plugin.ValidationError{
-								Path:    "spec.selector.matchLabels",
-								Message: fmt.Sprintf("selector label %s=%v does not match template labels", k, v),
-							})
-						}
-					}
-				}
-			}
-		}
+	if hasSelector {
+		errors = append(errors, validateWorkloadSelectorMatch(selector, template)...)
 	}
-
-	// Validate containers
-	if templateSpec, ok := template["spec"].(map[string]any); ok {
-		if containers, ok := templateSpec["containers"].([]any); ok {
-			if len(containers) == 0 {
-				errors = append(errors, plugin.ValidationError{
-					Path:    "spec.template.spec.containers",
-					Message: "at least one container is required",
-				})
-			}
-			for i, c := range containers {
-				containerErrors := p.validateContainer(c, fmt.Sprintf("spec.template.spec.containers[%d]", i))
-				errors = append(errors, containerErrors...)
-			}
-		} else {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "spec.template.spec.containers",
-				Message: "containers is required",
-			})
-		}
-	}
-
-	// Validate replicas
-	if replicas, ok := spec["replicas"]; ok {
-		switch r := replicas.(type) {
-		case int:
-			if r < 0 {
-				errors = append(errors, plugin.ValidationError{
-					Path:    "spec.replicas",
-					Message: "replicas cannot be negative",
-				})
-			}
-		case int64:
-			if r < 0 {
-				errors = append(errors, plugin.ValidationError{
-					Path:    "spec.replicas",
-					Message: "replicas cannot be negative",
-				})
-			}
-		case float64:
-			if r < 0 {
-				errors = append(errors, plugin.ValidationError{
-					Path:    "spec.replicas",
-					Message: "replicas cannot be negative",
-				})
-			}
-		}
-	}
-
+	errors = append(errors, p.validateWorkloadContainers(template)...)
+	errors = append(errors, validateWorkloadReplicas(spec)...)
 	return errors
 }
 
@@ -637,88 +575,226 @@ func (p *Plugin) validateSecret(config map[string]any) []plugin.ValidationError 
 }
 
 func (p *Plugin) validateIngress(config map[string]any) []plugin.ValidationError {
-	var errors []plugin.ValidationError
-
 	spec, ok := config["spec"].(map[string]any)
 	if !ok {
 		return []plugin.ValidationError{{Path: "spec", Message: "spec is required for Ingress"}}
 	}
 
-	// Validate rules if present
-	if rules, ok := spec["rules"].([]any); ok {
-		for i, rule := range rules {
-			if ruleMap, ok := rule.(map[string]any); ok {
-				if http, ok := ruleMap["http"].(map[string]any); ok {
-					if paths, ok := http["paths"].([]any); ok {
-						for j, pathItem := range paths {
-							if pathMap, ok := pathItem.(map[string]any); ok {
-								// Validate pathType
-								if pathType, ok := pathMap["pathType"]; ok {
-									pathTypeStr := fmt.Sprintf("%v", pathType)
-									validTypes := []string{"Exact", "Prefix", "ImplementationSpecific"}
-									found := false
-									for _, t := range validTypes {
-										if t == pathTypeStr {
-											found = true
-											break
-										}
-									}
-									if !found {
-										errors = append(errors, plugin.ValidationError{
-											Path:    fmt.Sprintf("spec.rules[%d].http.paths[%d].pathType", i, j),
-											Message: fmt.Sprintf("invalid pathType: %s", pathTypeStr),
-										})
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
+	rules, ok := spec["rules"].([]any)
+	if !ok {
+		return nil
 	}
 
+	var errors []plugin.ValidationError
+	for i, rule := range rules {
+		errors = append(errors, validateIngressRule(rule, i)...)
+	}
 	return errors
 }
 
 // ValidateSemantic performs Kubernetes-specific semantic validation.
 func (p *Plugin) ValidateSemantic(config any) ([]plugin.ValidationError, error) {
-	var errors []plugin.ValidationError
-
 	configMap, ok := config.(map[string]any)
 	if !ok {
-		return errors, nil
+		return nil, nil
 	}
 
 	kind := fmt.Sprintf("%v", configMap["kind"])
-
-	// Check for common issues
-	switch kind {
-	case "Deployment", "StatefulSet":
-		if spec, ok := configMap["spec"].(map[string]any); ok {
-			// Warn about using 'latest' tag
-			if template, ok := spec["template"].(map[string]any); ok {
-				if templateSpec, ok := template["spec"].(map[string]any); ok {
-					if containers, ok := templateSpec["containers"].([]any); ok {
-						for i, c := range containers {
-							if cMap, ok := c.(map[string]any); ok {
-								if image, ok := cMap["image"].(string); ok {
-									if strings.HasSuffix(image, ":latest") || !strings.Contains(image, ":") {
-										errors = append(errors, plugin.ValidationError{
-											Path:    fmt.Sprintf("spec.template.spec.containers[%d].image", i),
-											Message: fmt.Sprintf("using 'latest' or no tag for image %s is not recommended for production", image),
-										})
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
+	if kind != "Deployment" && kind != "StatefulSet" {
+		return nil, nil
 	}
 
-	return errors, nil
+	return validateWorkloadImageTags(configMap), nil
+}
+
+func validateWorkloadSelectorMatch(selector, template map[string]any) []plugin.ValidationError {
+	matchLabels, ok := selector["matchLabels"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	templateMeta, ok := template["metadata"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	templateLabels, ok := templateMeta["labels"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for key, value := range matchLabels {
+		templateValue, exists := templateLabels[key]
+		if exists && fmt.Sprintf("%v", templateValue) == fmt.Sprintf("%v", value) {
+			continue
+		}
+
+		errors = append(errors, plugin.ValidationError{
+			Path:    "spec.selector.matchLabels",
+			Message: fmt.Sprintf("selector label %s=%v does not match template labels", key, value),
+		})
+	}
+	return errors
+}
+
+func (p *Plugin) validateWorkloadContainers(template map[string]any) []plugin.ValidationError {
+	templateSpec, ok := template["spec"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	containers, ok := templateSpec["containers"].([]any)
+	if !ok {
+		return []plugin.ValidationError{{
+			Path:    "spec.template.spec.containers",
+			Message: "containers is required",
+		}}
+	}
+
+	var errors []plugin.ValidationError
+	if len(containers) == 0 {
+		errors = append(errors, plugin.ValidationError{
+			Path:    "spec.template.spec.containers",
+			Message: "at least one container is required",
+		})
+	}
+
+	for i, container := range containers {
+		path := fmt.Sprintf("spec.template.spec.containers[%d]", i)
+		errors = append(errors, p.validateContainer(container, path)...)
+	}
+	return errors
+}
+
+func validateWorkloadReplicas(spec map[string]any) []plugin.ValidationError {
+	replicas, exists := spec["replicas"]
+	if !exists {
+		return nil
+	}
+
+	replicaCount := k8sNumericToFloat(replicas)
+	if replicaCount >= 0 {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "spec.replicas",
+		Message: "replicas cannot be negative",
+	}}
+}
+
+func validateIngressRule(rule any, ruleIndex int) []plugin.ValidationError {
+	ruleMap, ok := rule.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	httpMap, ok := ruleMap["http"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	paths, ok := httpMap["paths"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for pathIndex, pathItem := range paths {
+		errors = append(errors, validateIngressPathType(pathItem, ruleIndex, pathIndex)...)
+	}
+	return errors
+}
+
+func validateIngressPathType(pathItem any, ruleIndex, pathIndex int) []plugin.ValidationError {
+	pathMap, ok := pathItem.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	pathType, exists := pathMap["pathType"]
+	if !exists {
+		return nil
+	}
+
+	pathTypeStr := fmt.Sprintf("%v", pathType)
+	validTypes := []string{"Exact", "Prefix", "ImplementationSpecific"}
+	if containsString(validTypes, pathTypeStr) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    fmt.Sprintf("spec.rules[%d].http.paths[%d].pathType", ruleIndex, pathIndex),
+		Message: fmt.Sprintf("invalid pathType: %s", pathTypeStr),
+	}}
+}
+
+func validateWorkloadImageTags(configMap map[string]any) []plugin.ValidationError {
+	spec, ok := configMap["spec"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	template, ok := spec["template"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	templateSpec, ok := template["spec"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	containers, ok := templateSpec["containers"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for i, container := range containers {
+		containerMap, ok := container.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		image, ok := containerMap["image"].(string)
+		if !ok {
+			continue
+		}
+
+		if !strings.HasSuffix(image, ":latest") && strings.Contains(image, ":") {
+			continue
+		}
+
+		errors = append(errors, plugin.ValidationError{
+			Path:    fmt.Sprintf("spec.template.spec.containers[%d].image", i),
+			Message: fmt.Sprintf("using 'latest' or no tag for image %s is not recommended for production", image),
+		})
+	}
+	return errors
+}
+
+func containsString(values []string, candidate string) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func k8sNumericToFloat(v any) float64 {
+	switch n := v.(type) {
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case float64:
+		return n
+	default:
+		return 0
+	}
 }
 
 // Normalize normalizes the configuration to a canonical form.
@@ -865,14 +941,18 @@ func parseResourceQuantity(s string) float64 {
 	for suffix, mult := range multipliers {
 		if strings.HasSuffix(s, suffix) {
 			numStr := strings.TrimSuffix(s, suffix)
-			var num float64
-			fmt.Sscanf(numStr, "%f", &num)
+			num, err := strconv.ParseFloat(strings.TrimSpace(numStr), 64)
+			if err != nil {
+				return 0
+			}
 			return num * mult
 		}
 	}
 
-	var num float64
-	fmt.Sscanf(s, "%f", &num)
+	num, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
 	return num
 }
 

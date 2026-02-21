@@ -5,7 +5,6 @@ package file
 
 import (
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -84,7 +83,7 @@ func (d *FileDataSource) Schema(ctx context.Context, req datasource.SchemaReques
 				Computed:    true,
 			},
 			"md5": schema.StringAttribute{
-				Description: "MD5 checksum of the file content.",
+				Description: "Deprecated insecure checksum field. Always null.",
 				Computed:    true,
 			},
 			"sha256": schema.StringAttribute{
@@ -185,8 +184,7 @@ func (d *FileDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		}
 
 		// Calculate checksums
-		md5sum := md5.Sum(content)
-		data.MD5 = types.StringValue(hex.EncodeToString(md5sum[:]))
+		data.MD5 = types.StringNull()
 
 		sha256sum := sha256.Sum256(content)
 		data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))

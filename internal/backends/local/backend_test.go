@@ -96,7 +96,7 @@ func TestBackend_Exists(t *testing.T) {
 
 	// Create a file
 	path := "test.txt"
-	if err := os.WriteFile(filepath.Join(dir, path), []byte("test"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, path), []byte("test"), 0600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -138,7 +138,7 @@ func TestBackend_Delete(t *testing.T) {
 
 	// Create a file
 	path := "test.txt"
-	if err := os.WriteFile(filepath.Join(dir, path), []byte("test"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, path), []byte("test"), 0600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -176,7 +176,7 @@ func TestBackend_Stat(t *testing.T) {
 	// Create a file
 	path := "test.txt"
 	content := []byte("Hello, World!")
-	if err := os.WriteFile(filepath.Join(dir, path), content, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, path), content, 0600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
@@ -290,7 +290,7 @@ func TestBackend_List(t *testing.T) {
 	// Create some files
 	files := []string{"a.txt", "b.txt", "c.txt"}
 	for _, f := range files {
-		if err := os.WriteFile(filepath.Join(dir, f), []byte("test"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("test"), 0600); err != nil {
 			t.Fatalf("WriteFile failed: %v", err)
 		}
 	}
@@ -351,7 +351,7 @@ func TestBackend_Symlink(t *testing.T) {
 	defer backend.Close()
 
 	// Create a file
-	if err := os.WriteFile(filepath.Join(dir, "target.txt"), []byte("test"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "target.txt"), []byte("test"), 0600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 

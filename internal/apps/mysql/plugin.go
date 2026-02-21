@@ -235,93 +235,99 @@ func (p *Plugin) Validate(config any) ([]plugin.ValidationError, error) {
 func (p *Plugin) validateMysqldSection(mysqld map[string]any) []plugin.ValidationError {
 	var errors []plugin.ValidationError
 
-	// Validate port
-	if port, ok := mysqld["port"]; ok {
-		portNum := toInt(port)
-		if portNum < 0 || portNum > 65535 {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "mysqld.port",
-				Message: fmt.Sprintf("invalid port number: %d (must be 0-65535)", portNum),
-				Value:   port,
-			})
-		}
-	}
-
-	// Validate buffer sizes
-	if size, ok := mysqld["innodb_buffer_pool_size"].(string); ok && size != "" {
-		if !isValidBufferSize(size) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "mysqld.innodb_buffer_pool_size",
-				Message: fmt.Sprintf("invalid buffer size format: %s (expected: 128M, 1G, etc.)", size),
-				Value:   size,
-			})
-		}
-	}
-
-	if size, ok := mysqld["innodb_log_file_size"].(string); ok && size != "" {
-		if !isValidBufferSize(size) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "mysqld.innodb_log_file_size",
-				Message: fmt.Sprintf("invalid buffer size format: %s (expected: 48M, 1G, etc.)", size),
-				Value:   size,
-			})
-		}
-	}
-
-	if size, ok := mysqld["max_allowed_packet"].(string); ok && size != "" {
-		if !isValidBufferSize(size) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "mysqld.max_allowed_packet",
-				Message: fmt.Sprintf("invalid buffer size format: %s (expected: 16M, 1G, etc.)", size),
-				Value:   size,
-			})
-		}
-	}
-
-	// Validate innodb_flush_log_at_trx_commit
-	if val, ok := mysqld["innodb_flush_log_at_trx_commit"]; ok {
-		v := toInt(val)
-		if v < 0 || v > 2 {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "mysqld.innodb_flush_log_at_trx_commit",
-				Message: fmt.Sprintf("invalid value: %d (must be 0, 1, or 2)", v),
-				Value:   val,
-			})
-		}
-	}
-
-	// Validate max_connections
-	if val, ok := mysqld["max_connections"]; ok {
-		v := toInt(val)
-		if v < 1 || v > 100000 {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "mysqld.max_connections",
-				Message: fmt.Sprintf("invalid value: %d (must be 1-100000)", v),
-				Value:   val,
-			})
-		}
-	}
-
-	// Validate gtid_mode
-	if gtidMode, ok := mysqld["gtid_mode"].(string); ok && gtidMode != "" {
-		validModes := []string{"OFF", "OFF_PERMISSIVE", "ON_PERMISSIVE", "ON"}
-		valid := false
-		for _, m := range validModes {
-			if strings.EqualFold(gtidMode, m) {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "mysqld.gtid_mode",
-				Message: fmt.Sprintf("invalid gtid_mode: %s (must be one of: %s)", gtidMode, strings.Join(validModes, ", ")),
-				Value:   gtidMode,
-			})
-		}
-	}
-
+	errors = append(errors, validateMySQLPort(mysqld)...)
+	errors = append(errors, validateMySQLBufferSizes(mysqld)...)
+	errors = append(errors, validateMySQLFlushLog(mysqld)...)
+	errors = append(errors, validateMySQLMaxConnections(mysqld)...)
+	errors = append(errors, validateMySQLGTIDMode(mysqld)...)
 	return errors
+}
+
+func validateMySQLPort(mysqld map[string]any) []plugin.ValidationError {
+	port, ok := mysqld["port"]
+	if !ok {
+		return nil
+	}
+	portNum := toInt(port)
+	if portNum >= 0 && portNum <= 65535 {
+		return nil
+	}
+	return []plugin.ValidationError{{
+		Path:    "mysqld.port",
+		Message: fmt.Sprintf("invalid port number: %d (must be 0-65535)", portNum),
+		Value:   port,
+	}}
+}
+
+func validateMySQLBufferSizes(mysqld map[string]any) []plugin.ValidationError {
+	fields := map[string]string{
+		"innodb_buffer_pool_size": "128M, 1G",
+		"innodb_log_file_size":    "48M, 1G",
+		"max_allowed_packet":      "16M, 1G",
+	}
+	var errors []plugin.ValidationError
+	for field, example := range fields {
+		size, ok := mysqld[field].(string)
+		if !ok || size == "" || isValidBufferSize(size) {
+			continue
+		}
+		errors = append(errors, plugin.ValidationError{
+			Path:    "mysqld." + field,
+			Message: fmt.Sprintf("invalid buffer size format: %s (expected: %s, etc.)", size, example),
+			Value:   size,
+		})
+	}
+	return errors
+}
+
+func validateMySQLFlushLog(mysqld map[string]any) []plugin.ValidationError {
+	val, ok := mysqld["innodb_flush_log_at_trx_commit"]
+	if !ok {
+		return nil
+	}
+	v := toInt(val)
+	if v >= 0 && v <= 2 {
+		return nil
+	}
+	return []plugin.ValidationError{{
+		Path:    "mysqld.innodb_flush_log_at_trx_commit",
+		Message: fmt.Sprintf("invalid value: %d (must be 0, 1, or 2)", v),
+		Value:   val,
+	}}
+}
+
+func validateMySQLMaxConnections(mysqld map[string]any) []plugin.ValidationError {
+	val, ok := mysqld["max_connections"]
+	if !ok {
+		return nil
+	}
+	v := toInt(val)
+	if v >= 1 && v <= 100000 {
+		return nil
+	}
+	return []plugin.ValidationError{{
+		Path:    "mysqld.max_connections",
+		Message: fmt.Sprintf("invalid value: %d (must be 1-100000)", v),
+		Value:   val,
+	}}
+}
+
+func validateMySQLGTIDMode(mysqld map[string]any) []plugin.ValidationError {
+	gtidMode, ok := mysqld["gtid_mode"].(string)
+	if !ok || gtidMode == "" {
+		return nil
+	}
+	validModes := []string{"OFF", "OFF_PERMISSIVE", "ON_PERMISSIVE", "ON"}
+	for _, mode := range validModes {
+		if strings.EqualFold(gtidMode, mode) {
+			return nil
+		}
+	}
+	return []plugin.ValidationError{{
+		Path:    "mysqld.gtid_mode",
+		Message: fmt.Sprintf("invalid gtid_mode: %s (must be one of: %s)", gtidMode, strings.Join(validModes, ", ")),
+		Value:   gtidMode,
+	}}
 }
 
 // validateClientSection validates a client section (mysql, client).

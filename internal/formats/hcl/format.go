@@ -349,49 +349,20 @@ func isBlock(key string, value any) bool {
 
 // writeBlock writes an HCL block.
 func writeBlock(body *hclwrite.Body, key string, value any, opts plugin.SerializeOptions) error {
-	// Parse block type and labels from key
-	parts := strings.Split(key, ".")
-	blockType := parts[0]
-	labels := parts[1:]
+	blockType, labels := parseBlockKey(key)
 
 	switch v := value.(type) {
 	case map[string]any:
-		// Check for __labels__ in the value
-		if lbls, ok := v["__labels__"].([]any); ok && len(labels) == 0 {
-			for _, l := range lbls {
-				if s, ok := l.(string); ok {
-					labels = append(labels, s)
-				}
-			}
-		}
-
-		block := body.AppendNewBlock(blockType, labels)
-		blockBody := block.Body()
-
-		// Write nested content
-		return writeMapToBody(blockBody, v, opts)
+		return appendBlock(body, blockType, labelsFromValue(v, labels), v, opts)
 
 	case []any:
-		// Multiple blocks with same type
 		for _, item := range v {
-			if itemMap, ok := item.(map[string]any); ok {
-				// Get labels for this specific block
-				blockLabels := labels
-				if lbls, ok := itemMap["__labels__"].([]any); ok && len(labels) == 0 {
-					blockLabels = nil
-					for _, l := range lbls {
-						if s, ok := l.(string); ok {
-							blockLabels = append(blockLabels, s)
-						}
-					}
-				}
-
-				block := body.AppendNewBlock(blockType, blockLabels)
-				blockBody := block.Body()
-
-				if err := writeMapToBody(blockBody, itemMap, opts); err != nil {
-					return err
-				}
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if err := appendBlock(body, blockType, labelsFromValue(itemMap, labels), itemMap, opts); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -401,6 +372,36 @@ func writeBlock(body *hclwrite.Body, key string, value any, opts plugin.Serializ
 		body.SetAttributeValue(key, goToCty(v))
 		return nil
 	}
+}
+
+func parseBlockKey(key string) (string, []string) {
+	parts := strings.Split(key, ".")
+	return parts[0], parts[1:]
+}
+
+func labelsFromValue(m map[string]any, fallback []string) []string {
+	if len(fallback) > 0 {
+		return fallback
+	}
+
+	lbls, ok := m["__labels__"].([]any)
+	if !ok {
+		return fallback
+	}
+
+	labels := make([]string, 0, len(lbls))
+	for _, l := range lbls {
+		s, ok := l.(string)
+		if ok {
+			labels = append(labels, s)
+		}
+	}
+	return labels
+}
+
+func appendBlock(body *hclwrite.Body, blockType string, labels []string, blockMap map[string]any, opts plugin.SerializeOptions) error {
+	block := body.AppendNewBlock(blockType, labels)
+	return writeMapToBody(block.Body(), blockMap, opts)
 }
 
 // Merge merges two HCL values according to the strategy.
@@ -601,17 +602,7 @@ func (f *Format) Delete(data any, path string) (any, error) {
 			return nil, fmt.Errorf("invalid array index: %s", lastPart)
 		}
 		if idx >= 0 && idx < len(v) {
-			trimmed := append(v[:idx], v[idx+1:]...)
-			switch p := parent.(type) {
-			case map[string]any:
-				p[parentMapKey] = trimmed
-			case []any:
-				if parentSliceIdx >= 0 && parentSliceIdx < len(p) {
-					p[parentSliceIdx] = trimmed
-				}
-			default:
-				result = trimmed
-			}
+			result = replaceParentSlice(result, parent, parentMapKey, parentSliceIdx, v, idx)
 		}
 	}
 
@@ -786,6 +777,21 @@ func parseArrayIndex(part string) (int, error) {
 		return 0, fmt.Errorf("invalid array index: %s", part)
 	}
 	return idx, nil
+}
+
+func replaceParentSlice(result, parent any, parentMapKey string, parentSliceIdx int, source []any, removeIdx int) any {
+	trimmed := append(source[:removeIdx], source[removeIdx+1:]...)
+	switch p := parent.(type) {
+	case map[string]any:
+		p[parentMapKey] = trimmed
+	case []any:
+		if parentSliceIdx >= 0 && parentSliceIdx < len(p) {
+			p[parentSliceIdx] = trimmed
+		}
+	default:
+		result = trimmed
+	}
+	return result
 }
 
 // FormatFile formats HCL data.

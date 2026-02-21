@@ -301,87 +301,95 @@ func (b *Backend) List(ctx context.Context, prefix string, opts plugin.ListOptio
 		listOpts.MaxResults = &maxResults
 	}
 
-	var files []plugin.FileInfo
-	delimiter := "/"
-
 	if opts.Recursive {
-		// Flat listing for recursive
-		pager := containerClient.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
-			Prefix:     &fullPrefix,
-			MaxResults: listOpts.MaxResults,
-		})
-
-		for pager.More() {
-			resp, err := pager.NextPage(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("failed to list blobs: %w", err)
-			}
-
-			for _, item := range resp.Segment.BlobItems {
-				name := strings.TrimPrefix(*item.Name, fullPrefix)
-				if name == "" {
-					continue
-				}
-				files = append(files, plugin.FileInfo{
-					Name:        name,
-					Path:        *item.Name,
-					Size:        *item.Properties.ContentLength,
-					ModTime:     *item.Properties.LastModified,
-					IsDir:       false,
-					ETag:        string(*item.Properties.ETag),
-					ContentType: safeString(item.Properties.ContentType),
-				})
-			}
-
-			if opts.MaxResults > 0 && len(files) >= opts.MaxResults {
-				break
-			}
-		}
-	} else {
-		// Hierarchical listing
-		pager := containerClient.NewListBlobsHierarchyPager(delimiter, listOpts)
-
-		for pager.More() {
-			resp, err := pager.NextPage(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("failed to list blobs: %w", err)
-			}
-
-			// Add virtual directories
-			for _, prefix := range resp.Segment.BlobPrefixes {
-				name := strings.TrimPrefix(*prefix.Name, fullPrefix)
-				name = strings.TrimSuffix(name, "/")
-				files = append(files, plugin.FileInfo{
-					Name:  name,
-					Path:  *prefix.Name,
-					IsDir: true,
-				})
-			}
-
-			// Add blobs
-			for _, item := range resp.Segment.BlobItems {
-				name := strings.TrimPrefix(*item.Name, fullPrefix)
-				if name == "" {
-					continue
-				}
-				files = append(files, plugin.FileInfo{
-					Name:        name,
-					Path:        *item.Name,
-					Size:        *item.Properties.ContentLength,
-					ModTime:     *item.Properties.LastModified,
-					IsDir:       false,
-					ETag:        string(*item.Properties.ETag),
-					ContentType: safeString(item.Properties.ContentType),
-				})
-			}
-
-			if opts.MaxResults > 0 && len(files) >= opts.MaxResults {
-				break
-			}
-		}
+		return b.listFlatBlobs(ctx, containerClient, fullPrefix, opts, listOpts.MaxResults)
 	}
 
+	return b.listHierarchicalBlobs(ctx, containerClient, fullPrefix, opts, listOpts)
+}
+
+func (b *Backend) listFlatBlobs(ctx context.Context, containerClient *container.Client, fullPrefix string, opts plugin.ListOptions, maxResults *int32) ([]plugin.FileInfo, error) {
+	pager := containerClient.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
+		Prefix:     &fullPrefix,
+		MaxResults: maxResults,
+	})
+
+	files := make([]plugin.FileInfo, 0)
+	for pager.More() {
+		resp, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list blobs: %w", err)
+		}
+
+		for _, item := range resp.Segment.BlobItems {
+			if fileInfo, ok := azureBlobItemToFileInfo(item, fullPrefix); ok {
+				files = append(files, fileInfo)
+			}
+		}
+
+		if reachedMaxListResults(len(files), opts.MaxResults) {
+			break
+		}
+	}
 	return files, nil
+}
+
+func (b *Backend) listHierarchicalBlobs(ctx context.Context, containerClient *container.Client, fullPrefix string, opts plugin.ListOptions, listOpts *container.ListBlobsHierarchyOptions) ([]plugin.FileInfo, error) {
+	pager := containerClient.NewListBlobsHierarchyPager("/", listOpts)
+
+	files := make([]plugin.FileInfo, 0)
+	for pager.More() {
+		resp, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list blobs: %w", err)
+		}
+
+		files = append(files, azurePrefixesToDirectories(resp.Segment.BlobPrefixes, fullPrefix)...)
+		for _, item := range resp.Segment.BlobItems {
+			if fileInfo, ok := azureBlobItemToFileInfo(item, fullPrefix); ok {
+				files = append(files, fileInfo)
+			}
+		}
+
+		if reachedMaxListResults(len(files), opts.MaxResults) {
+			break
+		}
+	}
+	return files, nil
+}
+
+func azurePrefixesToDirectories(prefixes []*container.BlobPrefix, fullPrefix string) []plugin.FileInfo {
+	files := make([]plugin.FileInfo, 0, len(prefixes))
+	for _, blobPrefix := range prefixes {
+		name := strings.TrimPrefix(*blobPrefix.Name, fullPrefix)
+		name = strings.TrimSuffix(name, "/")
+		files = append(files, plugin.FileInfo{
+			Name:  name,
+			Path:  *blobPrefix.Name,
+			IsDir: true,
+		})
+	}
+	return files
+}
+
+func azureBlobItemToFileInfo(item *container.BlobItem, fullPrefix string) (plugin.FileInfo, bool) {
+	name := strings.TrimPrefix(*item.Name, fullPrefix)
+	if name == "" {
+		return plugin.FileInfo{}, false
+	}
+	return plugin.FileInfo{
+		Name:        name,
+		Path:        *item.Name,
+		Size:        *item.Properties.ContentLength,
+		ModTime:     *item.Properties.LastModified,
+		IsDir:       false,
+		ETag:        string(*item.Properties.ETag),
+		ContentType: safeString(item.Properties.ContentType),
+	}, true
+}
+
+func reachedMaxListResults(current, max int) bool {
+	return max > 0 && current >= max
 }
 
 // Mkdir creates a virtual directory (empty blob with trailing slash).

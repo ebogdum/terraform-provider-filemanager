@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"strings"
@@ -111,7 +112,7 @@ func (b *Backend) Connect(ctx context.Context, config plugin.BackendConfig) erro
 	}
 
 	if err := conn.Login(username, password); err != nil {
-		conn.Quit()
+		_ = conn.Quit()
 		return fmt.Errorf("failed to login to FTP server: %w", err)
 	}
 
@@ -336,7 +337,7 @@ func (b *Backend) Stat(ctx context.Context, filePath string) (*plugin.FileInfo, 
 			fileInfo := &plugin.FileInfo{
 				Name:    entry.Name,
 				Path:    absPath,
-				Size:    int64(entry.Size),
+				Size:    clampUint64ToInt64(entry.Size),
 				ModTime: entry.Time,
 				IsDir:   entry.Type == ftp.EntryTypeFolder,
 			}
@@ -389,49 +390,11 @@ func (b *Backend) List(ctx context.Context, dirPath string, opts plugin.ListOpti
 		}
 
 		for i, entry := range entries {
-			// Skip . and ..
-			if entry.Name == "." || entry.Name == ".." {
+			if shouldSkipListEntry(entry, i, opts) {
 				continue
 			}
 
-			// Apply offset
-			if opts.Offset > 0 && i < opts.Offset {
-				continue
-			}
-
-			// Skip hidden files if not included
-			if !opts.IncludeHidden && strings.HasPrefix(entry.Name, ".") {
-				continue
-			}
-
-			// Apply pattern filter
-			if opts.Pattern != "" {
-				matched, err := path.Match(opts.Pattern, entry.Name)
-				if err != nil || !matched {
-					continue
-				}
-			}
-
-			fileInfo := plugin.FileInfo{
-				Name:    entry.Name,
-				Path:    path.Join(absPath, entry.Name),
-				Size:    int64(entry.Size),
-				ModTime: entry.Time,
-				IsDir:   entry.Type == ftp.EntryTypeFolder,
-			}
-
-			if entry.Type == ftp.EntryTypeFolder {
-				fileInfo.Mode = os.ModeDir | 0755
-			} else {
-				fileInfo.Mode = 0644
-			}
-
-			if entry.Type == ftp.EntryTypeLink {
-				fileInfo.IsSymlink = true
-				fileInfo.LinkTarget = entry.Target
-			}
-
-			results = append(results, fileInfo)
+			results = append(results, ftpEntryToFileInfo(entry, absPath))
 
 			// Check max results
 			if opts.MaxResults > 0 && len(results) >= opts.MaxResults {
@@ -451,47 +414,12 @@ func (b *Backend) walkDir(dirPath string, results *[]plugin.FileInfo, opts plugi
 	}
 
 	for _, entry := range entries {
-		if entry.Name == "." || entry.Name == ".." {
+		if shouldSkipRecursiveEntry(entry, opts) {
 			continue
-		}
-
-		// Skip hidden files if not included
-		if !opts.IncludeHidden && strings.HasPrefix(entry.Name, ".") {
-			continue
-		}
-
-		// Apply pattern filter
-		if opts.Pattern != "" {
-			matched, err := path.Match(opts.Pattern, entry.Name)
-			if err != nil || !matched {
-				if entry.Type != ftp.EntryTypeFolder {
-					continue
-				}
-			}
 		}
 
 		entryPath := path.Join(dirPath, entry.Name)
-
-		fileInfo := plugin.FileInfo{
-			Name:    entry.Name,
-			Path:    entryPath,
-			Size:    int64(entry.Size),
-			ModTime: entry.Time,
-			IsDir:   entry.Type == ftp.EntryTypeFolder,
-		}
-
-		if entry.Type == ftp.EntryTypeFolder {
-			fileInfo.Mode = os.ModeDir | 0755
-		} else {
-			fileInfo.Mode = 0644
-		}
-
-		if entry.Type == ftp.EntryTypeLink {
-			fileInfo.IsSymlink = true
-			fileInfo.LinkTarget = entry.Target
-		}
-
-		*results = append(*results, fileInfo)
+		*results = append(*results, ftpEntryToFileInfo(entry, dirPath))
 
 		// Check max results
 		if opts.MaxResults > 0 && len(*results) >= opts.MaxResults {
@@ -737,4 +665,72 @@ func isFTPPermissionDenied(err error) bool {
 	return strings.Contains(errStr, "550") || // Permission denied often uses 550
 		strings.Contains(errStr, "553") || // File name not allowed
 		strings.Contains(errStr, "permission denied")
+}
+
+func clampUint64ToInt64(v uint64) int64 {
+	if v > uint64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	return int64(v)
+}
+
+func shouldSkipListEntry(entry *ftp.Entry, index int, opts plugin.ListOptions) bool {
+	if isFTPTraversalEntry(entry.Name) {
+		return true
+	}
+	if opts.Offset > 0 && index < opts.Offset {
+		return true
+	}
+	return !matchesEntryFilters(entry, opts, false)
+}
+
+func shouldSkipRecursiveEntry(entry *ftp.Entry, opts plugin.ListOptions) bool {
+	if isFTPTraversalEntry(entry.Name) {
+		return true
+	}
+	return !matchesEntryFilters(entry, opts, true)
+}
+
+func isFTPTraversalEntry(name string) bool {
+	return name == "." || name == ".."
+}
+
+func matchesEntryFilters(entry *ftp.Entry, opts plugin.ListOptions, allowDirPatternMiss bool) bool {
+	if !opts.IncludeHidden && strings.HasPrefix(entry.Name, ".") {
+		return false
+	}
+	if opts.Pattern == "" {
+		return true
+	}
+
+	matched, err := path.Match(opts.Pattern, entry.Name)
+	if err != nil {
+		return false
+	}
+	if matched {
+		return true
+	}
+	return allowDirPatternMiss && entry.Type == ftp.EntryTypeFolder
+}
+
+func ftpEntryToFileInfo(entry *ftp.Entry, parentPath string) plugin.FileInfo {
+	fileInfo := plugin.FileInfo{
+		Name:    entry.Name,
+		Path:    path.Join(parentPath, entry.Name),
+		Size:    clampUint64ToInt64(entry.Size),
+		ModTime: entry.Time,
+		IsDir:   entry.Type == ftp.EntryTypeFolder,
+	}
+
+	if entry.Type == ftp.EntryTypeFolder {
+		fileInfo.Mode = os.ModeDir | 0755
+	} else {
+		fileInfo.Mode = 0644
+	}
+
+	if entry.Type == ftp.EntryTypeLink {
+		fileInfo.IsSymlink = true
+		fileInfo.LinkTarget = entry.Target
+	}
+	return fileInfo
 }

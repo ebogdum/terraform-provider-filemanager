@@ -480,58 +480,8 @@ func (p *Plugin) validateCertResolvers(resolvers map[string]any) []plugin.Valida
 			continue
 		}
 
-		// Validate ACME configuration
 		if acme, ok := resolverMap["acme"].(map[string]any); ok {
-			// Validate email
-			if email, ok := acme["email"].(string); ok {
-				if !isValidEmail(email) {
-					errors = append(errors, plugin.ValidationError{
-						Path:    fmt.Sprintf("certificatesResolvers.%s.acme.email", name),
-						Message: fmt.Sprintf("invalid email format: %s", email),
-					})
-				}
-			} else {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("certificatesResolvers.%s.acme.email", name),
-					Message: "email is required for ACME",
-				})
-			}
-
-			// Validate storage
-			if _, ok := acme["storage"].(string); !ok {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("certificatesResolvers.%s.acme.storage", name),
-					Message: "storage is required for ACME",
-				})
-			}
-
-			// Validate challenge type
-			hasChallenge := false
-			if _, ok := acme["httpChallenge"]; ok {
-				hasChallenge = true
-			}
-			if _, ok := acme["tlsChallenge"]; ok {
-				hasChallenge = true
-			}
-			if _, ok := acme["dnsChallenge"]; ok {
-				hasChallenge = true
-			}
-			if !hasChallenge {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("certificatesResolvers.%s.acme", name),
-					Message: "at least one challenge type is required (httpChallenge, tlsChallenge, or dnsChallenge)",
-				})
-			}
-
-			// Validate caServer if not using production
-			if caServer, ok := acme["caServer"].(string); ok {
-				if strings.Contains(caServer, "staging") {
-					errors = append(errors, plugin.ValidationError{
-						Path:    fmt.Sprintf("certificatesResolvers.%s.acme.caServer", name),
-						Message: "using staging CA server - certificates won't be trusted",
-					})
-				}
-			}
+			errors = append(errors, validateACMEConfig(name, acme)...)
 		}
 	}
 
@@ -617,40 +567,10 @@ func (p *Plugin) ValidateSemantic(config any) ([]plugin.ValidationError, error) 
 		return nil, fmt.Errorf("config must be a map")
 	}
 
-	// Check for HTTP to HTTPS redirect without HTTPS entrypoint
 	if entryPoints, ok := configMap["entryPoints"].(map[string]any); ok {
-		hasHTTPS := false
-		for _, ep := range entryPoints {
-			if epMap, ok := ep.(map[string]any); ok {
-				if address, ok := epMap["address"].(string); ok {
-					if strings.Contains(address, "443") {
-						hasHTTPS = true
-						break
-					}
-				}
-			}
-		}
-
-		// Check for redirects to HTTPS without HTTPS entrypoint
-		for name, ep := range entryPoints {
-			if epMap, ok := ep.(map[string]any); ok {
-				if http, ok := epMap["http"].(map[string]any); ok {
-					if redirects, ok := http["redirections"].(map[string]any); ok {
-						if epRedirect, ok := redirects["entryPoint"].(map[string]any); ok {
-							if scheme, ok := epRedirect["scheme"].(string); ok && scheme == "https" && !hasHTTPS {
-								errors = append(errors, plugin.ValidationError{
-									Path:    fmt.Sprintf("entryPoints.%s.http.redirections.entryPoint.scheme", name),
-									Message: "redirecting to HTTPS but no HTTPS entryPoint is configured",
-								})
-							}
-						}
-					}
-				}
-			}
-		}
+		errors = append(errors, validateHTTPSRedirects(entryPoints)...)
 	}
 
-	// Check for providers
 	if _, ok := configMap["providers"]; !ok {
 		errors = append(errors, plugin.ValidationError{
 			Path:    "providers",
@@ -772,4 +692,107 @@ func isValidEmail(email string) bool {
 	}
 
 	return parsed.Address == email
+}
+
+func validateACMEConfig(resolverName string, acme map[string]any) []plugin.ValidationError {
+	var errors []plugin.ValidationError
+	basePath := fmt.Sprintf("certificatesResolvers.%s.acme", resolverName)
+
+	email, emailOK := acme["email"].(string)
+	switch {
+	case !emailOK:
+		errors = append(errors, plugin.ValidationError{
+			Path:    basePath + ".email",
+			Message: "email is required for ACME",
+		})
+	case !isValidEmail(email):
+		errors = append(errors, plugin.ValidationError{
+			Path:    basePath + ".email",
+			Message: fmt.Sprintf("invalid email format: %s", email),
+		})
+	}
+
+	if _, ok := acme["storage"].(string); !ok {
+		errors = append(errors, plugin.ValidationError{
+			Path:    basePath + ".storage",
+			Message: "storage is required for ACME",
+		})
+	}
+
+	if !hasACMEChallenge(acme) {
+		errors = append(errors, plugin.ValidationError{
+			Path:    basePath,
+			Message: "at least one challenge type is required (httpChallenge, tlsChallenge, or dnsChallenge)",
+		})
+	}
+
+	if caServer, ok := acme["caServer"].(string); ok && strings.Contains(caServer, "staging") {
+		errors = append(errors, plugin.ValidationError{
+			Path:    basePath + ".caServer",
+			Message: "using staging CA server - certificates won't be trusted",
+		})
+	}
+
+	return errors
+}
+
+func hasACMEChallenge(acme map[string]any) bool {
+	_, hasHTTP := acme["httpChallenge"]
+	_, hasTLS := acme["tlsChallenge"]
+	_, hasDNS := acme["dnsChallenge"]
+	return hasHTTP || hasTLS || hasDNS
+}
+
+func validateHTTPSRedirects(entryPoints map[string]any) []plugin.ValidationError {
+	var errors []plugin.ValidationError
+	hasHTTPS := hasHTTPSEntryPoint(entryPoints)
+
+	for name, ep := range entryPoints {
+		epMap, ok := ep.(map[string]any)
+		if !ok {
+			continue
+		}
+		if !redirectsToHTTPS(epMap) || hasHTTPS {
+			continue
+		}
+
+		errors = append(errors, plugin.ValidationError{
+			Path:    fmt.Sprintf("entryPoints.%s.http.redirections.entryPoint.scheme", name),
+			Message: "redirecting to HTTPS but no HTTPS entryPoint is configured",
+		})
+	}
+
+	return errors
+}
+
+func hasHTTPSEntryPoint(entryPoints map[string]any) bool {
+	for _, ep := range entryPoints {
+		epMap, ok := ep.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		address, ok := epMap["address"].(string)
+		if ok && strings.Contains(address, "443") {
+			return true
+		}
+	}
+	return false
+}
+
+func redirectsToHTTPS(entryPoint map[string]any) bool {
+	http, ok := entryPoint["http"].(map[string]any)
+	if !ok {
+		return false
+	}
+	redirects, ok := http["redirections"].(map[string]any)
+	if !ok {
+		return false
+	}
+	entryPointRedirect, ok := redirects["entryPoint"].(map[string]any)
+	if !ok {
+		return false
+	}
+	scheme, ok := entryPointRedirect["scheme"].(string)
+	return ok && scheme == "https"
 }

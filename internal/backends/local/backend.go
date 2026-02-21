@@ -332,114 +332,105 @@ func (b *Backend) List(ctx context.Context, path string, opts plugin.ListOptions
 		return nil, plugin.ErrNotADirectory
 	}
 
-	var results []plugin.FileInfo
-
 	if opts.Recursive {
-		err = filepath.WalkDir(absPath, func(walkPath string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-
-			// Skip hidden files if not included
-			if !opts.IncludeHidden && strings.HasPrefix(d.Name(), ".") {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-
-			// Apply pattern filter
-			if opts.Pattern != "" {
-				matched, err := filepath.Match(opts.Pattern, d.Name())
-				if err != nil {
-					return err
-				}
-				if !matched {
-					return nil
-				}
-			}
-
-			info, err := d.Info()
-			if err != nil {
-				return nil // Skip files we can't stat
-			}
-
-			fileInfo := plugin.FileInfo{
-				Name:    info.Name(),
-				Path:    walkPath,
-				Size:    info.Size(),
-				Mode:    info.Mode(),
-				ModTime: info.ModTime(),
-				IsDir:   info.IsDir(),
-			}
-
-			b.fillUnixInfo(info, &fileInfo)
-			results = append(results, fileInfo)
-
-			// Check max results
-			if opts.MaxResults > 0 && len(results) >= opts.MaxResults {
-				return filepath.SkipAll
-			}
-
-			return nil
-		})
-	} else {
-		entries, err := os.ReadDir(absPath)
-		if err != nil {
-			return nil, err
-		}
-
-		for i, entry := range entries {
-			// Apply offset
-			if opts.Offset > 0 && i < opts.Offset {
-				continue
-			}
-
-			// Skip hidden files if not included
-			if !opts.IncludeHidden && strings.HasPrefix(entry.Name(), ".") {
-				continue
-			}
-
-			// Apply pattern filter
-			if opts.Pattern != "" {
-				matched, err := filepath.Match(opts.Pattern, entry.Name())
-				if err != nil {
-					continue
-				}
-				if !matched {
-					continue
-				}
-			}
-
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-
-			fileInfo := plugin.FileInfo{
-				Name:    info.Name(),
-				Path:    filepath.Join(absPath, info.Name()),
-				Size:    info.Size(),
-				Mode:    info.Mode(),
-				ModTime: info.ModTime(),
-				IsDir:   info.IsDir(),
-			}
-
-			b.fillUnixInfo(info, &fileInfo)
-			results = append(results, fileInfo)
-
-			// Check max results
-			if opts.MaxResults > 0 && len(results) >= opts.MaxResults {
-				break
-			}
-		}
+		return b.listRecursive(absPath, opts)
 	}
 
+	return b.listShallow(absPath, opts)
+}
+
+func (b *Backend) listRecursive(absPath string, opts plugin.ListOptions) ([]plugin.FileInfo, error) {
+	results := make([]plugin.FileInfo, 0)
+	err := filepath.WalkDir(absPath, func(walkPath string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		if shouldSkipLocalEntry(d.Name(), opts) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !matchesLocalPattern(d.Name(), opts.Pattern) {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+
+		results = append(results, b.toLocalFileInfo(info, walkPath))
+		if opts.MaxResults > 0 && len(results) >= opts.MaxResults {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (b *Backend) listShallow(absPath string, opts plugin.ListOptions) ([]plugin.FileInfo, error) {
+	entries, err := os.ReadDir(absPath)
 	if err != nil {
 		return nil, err
 	}
 
+	results := make([]plugin.FileInfo, 0, len(entries))
+	for i, entry := range entries {
+		if opts.Offset > 0 && i < opts.Offset {
+			continue
+		}
+		if shouldSkipLocalEntry(entry.Name(), opts) {
+			continue
+		}
+		if !matchesLocalPattern(entry.Name(), opts.Pattern) {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		results = append(results, b.toLocalFileInfo(info, filepath.Join(absPath, info.Name())))
+		if opts.MaxResults > 0 && len(results) >= opts.MaxResults {
+			break
+		}
+	}
+
 	return results, nil
+}
+
+func (b *Backend) toLocalFileInfo(info os.FileInfo, filePath string) plugin.FileInfo {
+	fileInfo := plugin.FileInfo{
+		Name:    info.Name(),
+		Path:    filePath,
+		Size:    info.Size(),
+		Mode:    info.Mode(),
+		ModTime: info.ModTime(),
+		IsDir:   info.IsDir(),
+	}
+	b.fillUnixInfo(info, &fileInfo)
+	return fileInfo
+}
+
+func shouldSkipLocalEntry(name string, opts plugin.ListOptions) bool {
+	if opts.IncludeHidden || !strings.HasPrefix(name, ".") {
+		return false
+	}
+	return true
+}
+
+func matchesLocalPattern(name, pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+	matched, err := filepath.Match(pattern, name)
+	return err == nil && matched
 }
 
 // Mkdir creates a directory.

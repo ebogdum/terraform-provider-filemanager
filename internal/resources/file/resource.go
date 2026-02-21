@@ -5,7 +5,6 @@ package file
 
 import (
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -227,7 +226,7 @@ You can specify file content using one of three methods (mutually exclusive):
 				Computed:    true,
 			},
 			"md5": schema.StringAttribute{
-				Description: "MD5 checksum of the file content.",
+				Description: "Deprecated insecure checksum field. Always null.",
 				Computed:    true,
 			},
 			"sha256": schema.StringAttribute{
@@ -675,8 +674,7 @@ func (r *FileResource) setOwnership(ctx context.Context, backend plugin.Backend,
 
 // computeChecksums computes MD5, SHA256, and SHA512 checksums.
 func (r *FileResource) computeChecksums(data *FileResourceModel, content []byte) {
-	md5sum := md5.Sum(content)
-	data.MD5 = types.StringValue(hex.EncodeToString(md5sum[:]))
+	data.MD5 = types.StringNull()
 
 	sha256sum := sha256.Sum256(content)
 	data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))

@@ -5,7 +5,6 @@ package copy
 
 import (
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -139,7 +138,7 @@ func (r *CopyResource) Schema(ctx context.Context, req resource.SchemaRequest, r
 				Computed:    true,
 			},
 			"md5": schema.StringAttribute{
-				Description: "MD5 checksum of the destination (for single file copy).",
+				Description: "Deprecated insecure checksum field. Always null.",
 				Computed:    true,
 			},
 			"sha256": schema.StringAttribute{
@@ -235,8 +234,7 @@ func (r *CopyResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	if info != nil && !info.IsDir() {
 		content, err := os.ReadFile(data.Destination.ValueString())
 		if err == nil {
-			md5sum := md5.Sum(content)
-			data.MD5 = types.StringValue(hex.EncodeToString(md5sum[:]))
+			data.MD5 = types.StringNull()
 
 			sha256sum := sha256.Sum256(content)
 			data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))
@@ -388,61 +386,60 @@ func (r *CopyResource) copyDir(ctx context.Context, src, dst string, data *CopyR
 	filesCopied := 0
 	var bytesCopied int64
 
-	err := filepath.Walk(src, func(srcPath string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	err := filepath.Walk(src, func(srcPath string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 
-		// Get relative path
 		relPath, err := filepath.Rel(src, srcPath)
 		if err != nil {
 			return err
 		}
 
-		// Check excludes
-		for _, pattern := range excludes {
-			matched, err := filepath.Match(pattern, relPath)
-			if err != nil {
-				continue
+		if shouldSkipCopyPath(excludes, relPath, info.Name()) {
+			if info.IsDir() {
+				return filepath.SkipDir
 			}
-			if matched {
-				if info.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			// Also try matching against the filename
-			matched, _ = filepath.Match(pattern, info.Name())
-			if matched {
-				if info.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
+			return nil
 		}
 
 		dstPath := filepath.Join(dst, relPath)
-
 		if info.IsDir() {
-			dirMode := common.ParseDirMode(data.DirectoryPermission.ValueString())
-			if data.PreservePermissions.ValueBool() {
-				dirMode = info.Mode()
-			}
-			return os.MkdirAll(dstPath, dirMode)
+			return createCopyDir(dstPath, info, data)
 		}
 
-		// Copy file
 		count, bytes, err := r.copyFile(ctx, srcPath, dstPath, data)
 		if err != nil {
 			return err
 		}
 		filesCopied += count
 		bytesCopied += bytes
-
 		return nil
 	})
 
 	return filesCopied, bytesCopied, err
+}
+
+func shouldSkipCopyPath(excludes []string, relPath, name string) bool {
+	for _, pattern := range excludes {
+		if matchesCopyPattern(pattern, relPath) || matchesCopyPattern(pattern, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesCopyPattern(pattern, value string) bool {
+	matched, err := filepath.Match(pattern, value)
+	return err == nil && matched
+}
+
+func createCopyDir(dstPath string, info os.FileInfo, data *CopyResourceModel) error {
+	dirMode := common.ParseDirMode(data.DirectoryPermission.ValueString())
+	if data.PreservePermissions.ValueBool() {
+		dirMode = info.Mode()
+	}
+	return os.MkdirAll(dstPath, dirMode)
 }
 
 // updateComputedValues updates the computed values in the model.
@@ -455,8 +452,7 @@ func (r *CopyResource) updateComputedValues(data *CopyResourceModel, filesCopied
 	if err == nil && !info.IsDir() {
 		content, err := os.ReadFile(data.Destination.ValueString())
 		if err == nil {
-			md5sum := md5.Sum(content)
-			data.MD5 = types.StringValue(hex.EncodeToString(md5sum[:]))
+			data.MD5 = types.StringNull()
 
 			sha256sum := sha256.Sum256(content)
 			data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))

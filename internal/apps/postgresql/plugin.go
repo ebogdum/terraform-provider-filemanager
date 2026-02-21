@@ -337,312 +337,357 @@ func (p *Plugin) DefaultConfig() any {
 
 // Validate validates the PostgreSQL configuration.
 func (p *Plugin) Validate(config any) ([]plugin.ValidationError, error) {
-	var errors []plugin.ValidationError
-
 	configMap, ok := config.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("config must be a map")
 	}
 
-	// Validate port
-	if port, ok := configMap["port"]; ok {
-		var portNum int
-		switch v := port.(type) {
-		case int:
-			portNum = v
-		case int64:
-			portNum = int(v)
-		case float64:
-			portNum = int(v)
-		}
-		if portNum < 1 || portNum > 65535 {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "port",
-				Message: fmt.Sprintf("invalid port number: %d (must be 1-65535)", portNum),
-				Value:   port,
-			})
-		}
-	}
-
-	// Validate max_connections
-	if maxConn, ok := configMap["max_connections"]; ok {
-		var maxConnNum int
-		switch v := maxConn.(type) {
-		case int:
-			maxConnNum = v
-		case int64:
-			maxConnNum = int(v)
-		case float64:
-			maxConnNum = int(v)
-		}
-		if maxConnNum < 1 {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "max_connections",
-				Message: fmt.Sprintf("invalid max_connections: %d (must be at least 1)", maxConnNum),
-				Value:   maxConn,
-			})
-		}
-	}
-
-	// Validate wal_level
-	if walLevel, ok := configMap["wal_level"].(string); ok {
-		validLevels := []string{"minimal", "replica", "logical"}
-		valid := false
-		for _, v := range validLevels {
-			if strings.EqualFold(walLevel, v) {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "wal_level",
-				Message: fmt.Sprintf("invalid wal_level: %s (must be one of: %s)", walLevel, strings.Join(validLevels, ", ")),
-				Value:   walLevel,
-			})
-		}
-	}
-
-	// Validate memory sizes
-	memorySizeFields := []string{
-		"shared_buffers", "effective_cache_size", "work_mem", "maintenance_work_mem",
-		"temp_buffers", "max_wal_size", "min_wal_size", "wal_buffers",
-	}
-	for _, field := range memorySizeFields {
-		if val, ok := configMap[field].(string); ok && val != "" && val != "-1" {
-			if !isValidMemorySize(val) {
-				errors = append(errors, plugin.ValidationError{
-					Path:    field,
-					Message: fmt.Sprintf("invalid memory size format: %s (expected: 128MB, 1GB, 4kB, etc.)", val),
-					Value:   val,
-				})
-			}
-		}
-	}
-
-	// Validate synchronous_commit
-	if syncCommit, ok := configMap["synchronous_commit"].(string); ok {
-		validOptions := []string{"off", "local", "remote_write", "remote_apply", "on"}
-		valid := false
-		for _, v := range validOptions {
-			if strings.EqualFold(syncCommit, v) {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "synchronous_commit",
-				Message: fmt.Sprintf("invalid synchronous_commit: %s (must be one of: %s)", syncCommit, strings.Join(validOptions, ", ")),
-				Value:   syncCommit,
-			})
-		}
-	}
-
-	// Validate archive_mode
-	if archiveMode, ok := configMap["archive_mode"].(string); ok {
-		validOptions := []string{"off", "on", "always"}
-		valid := false
-		for _, v := range validOptions {
-			if strings.EqualFold(archiveMode, v) {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "archive_mode",
-				Message: fmt.Sprintf("invalid archive_mode: %s (must be one of: %s)", archiveMode, strings.Join(validOptions, ", ")),
-				Value:   archiveMode,
-			})
-		}
-	}
-
-	// Validate password_encryption
-	if passEnc, ok := configMap["password_encryption"].(string); ok {
-		validOptions := []string{"md5", "scram-sha-256"}
-		valid := false
-		for _, v := range validOptions {
-			if strings.EqualFold(passEnc, v) {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "password_encryption",
-				Message: fmt.Sprintf("invalid password_encryption: %s (must be one of: %s)", passEnc, strings.Join(validOptions, ", ")),
-				Value:   passEnc,
-			})
-		}
-	}
-
-	// Validate log_statement
-	if logStmt, ok := configMap["log_statement"].(string); ok {
-		validOptions := []string{"none", "ddl", "mod", "all"}
-		valid := false
-		for _, v := range validOptions {
-			if strings.EqualFold(logStmt, v) {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "log_statement",
-				Message: fmt.Sprintf("invalid log_statement: %s (must be one of: %s)", logStmt, strings.Join(validOptions, ", ")),
-				Value:   logStmt,
-			})
-		}
-	}
-
-	// Validate checkpoint_completion_target
-	if cct, ok := configMap["checkpoint_completion_target"]; ok {
-		var cctVal float64
-		switch v := cct.(type) {
-		case float64:
-			cctVal = v
-		case int:
-			cctVal = float64(v)
-		case int64:
-			cctVal = float64(v)
-		}
-		if cctVal < 0 || cctVal > 1 {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "checkpoint_completion_target",
-				Message: fmt.Sprintf("invalid checkpoint_completion_target: %v (must be between 0.0 and 1.0)", cct),
-				Value:   cct,
-			})
-		}
-	}
-
+	var errors []plugin.ValidationError
+	errors = append(errors, validatePostgresPort(configMap)...)
+	errors = append(errors, validatePostgresMaxConnections(configMap)...)
+	errors = append(errors, validatePostgresWalLevel(configMap)...)
+	errors = append(errors, validatePostgresMemorySizes(configMap)...)
+	errors = append(errors, validatePostgresSynchronousCommit(configMap)...)
+	errors = append(errors, validatePostgresArchiveMode(configMap)...)
+	errors = append(errors, validatePostgresPasswordEncryption(configMap)...)
+	errors = append(errors, validatePostgresLogStatement(configMap)...)
+	errors = append(errors, validatePostgresCheckpointCompletionTarget(configMap)...)
 	return errors, nil
 }
 
 // ValidateSemantic performs PostgreSQL-specific semantic validation.
 func (p *Plugin) ValidateSemantic(config any) ([]plugin.ValidationError, error) {
-	var errors []plugin.ValidationError
-
 	configMap, ok := config.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("config must be a map")
 	}
 
-	// Check shared_buffers recommendation (typically 25% of RAM)
-	if sharedBuffers, ok := configMap["shared_buffers"].(string); ok {
-		sharedBytes := parseMemorySize(sharedBuffers)
-		if sharedBytes > 0 {
-			// Warn if shared_buffers is less than 128MB for production
-			if sharedBytes < 128*1024*1024 {
-				errors = append(errors, plugin.ValidationError{
-					Path:    "shared_buffers",
-					Message: fmt.Sprintf("shared_buffers (%s) is below recommended minimum of 128MB for production workloads", sharedBuffers),
-					Value:   sharedBuffers,
-				})
-			}
+	var errors []plugin.ValidationError
+	errors = append(errors, validatePostgresSharedBuffers(configMap)...)
+	errors = append(errors, validatePostgresReplicationWal(configMap)...)
+	errors = append(errors, validatePostgresArchiveSettings(configMap)...)
+	errors = append(errors, validatePostgresListenSSL(configMap)...)
+	errors = append(errors, validatePostgresSynchronousReplication(configMap)...)
+	errors = append(errors, validatePostgresWorkMemBudget(configMap)...)
+	return errors, nil
+}
 
-			// Check effective_cache_size relationship
-			if effectiveCache, ok := configMap["effective_cache_size"].(string); ok {
-				cacheBytes := parseMemorySize(effectiveCache)
-				if cacheBytes > 0 && cacheBytes < sharedBytes {
-					errors = append(errors, plugin.ValidationError{
-						Path:    "effective_cache_size",
-						Message: fmt.Sprintf("effective_cache_size (%s) should typically be larger than shared_buffers (%s)", effectiveCache, sharedBuffers),
-						Value:   effectiveCache,
-					})
-				}
-			}
-		}
+func validatePostgresPort(configMap map[string]any) []plugin.ValidationError {
+	port, ok := pgAnyToInt(configMap["port"])
+	if !ok {
+		return nil
+	}
+	if port >= 1 && port <= 65535 {
+		return nil
 	}
 
-	// Check WAL configuration for replication
-	walLevel, _ := configMap["wal_level"].(string)
-	maxWalSenders := 0
-	if mws, ok := configMap["max_wal_senders"]; ok {
-		switch v := mws.(type) {
-		case int:
-			maxWalSenders = v
-		case int64:
-			maxWalSenders = int(v)
-		case float64:
-			maxWalSenders = int(v)
-		}
+	return []plugin.ValidationError{{
+		Path:    "port",
+		Message: fmt.Sprintf("invalid port number: %d (must be 1-65535)", port),
+		Value:   configMap["port"],
+	}}
+}
+
+func validatePostgresMaxConnections(configMap map[string]any) []plugin.ValidationError {
+	maxConn, ok := pgAnyToInt(configMap["max_connections"])
+	if !ok {
+		return nil
+	}
+	if maxConn >= 1 {
+		return nil
 	}
 
-	if maxWalSenders > 0 && strings.EqualFold(walLevel, "minimal") {
+	return []plugin.ValidationError{{
+		Path:    "max_connections",
+		Message: fmt.Sprintf("invalid max_connections: %d (must be at least 1)", maxConn),
+		Value:   configMap["max_connections"],
+	}}
+}
+
+func validatePostgresWalLevel(configMap map[string]any) []plugin.ValidationError {
+	walLevel, ok := configMap["wal_level"].(string)
+	if !ok {
+		return nil
+	}
+
+	validLevels := []string{"minimal", "replica", "logical"}
+	if pgContainsFold(validLevels, walLevel) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "wal_level",
+		Message: fmt.Sprintf("invalid wal_level: %s (must be one of: %s)", walLevel, strings.Join(validLevels, ", ")),
+		Value:   walLevel,
+	}}
+}
+
+func validatePostgresMemorySizes(configMap map[string]any) []plugin.ValidationError {
+	memorySizeFields := []string{
+		"shared_buffers", "effective_cache_size", "work_mem", "maintenance_work_mem",
+		"temp_buffers", "max_wal_size", "min_wal_size", "wal_buffers",
+	}
+
+	var errors []plugin.ValidationError
+	for _, field := range memorySizeFields {
+		val, ok := configMap[field].(string)
+		if !ok || val == "" || val == "-1" {
+			continue
+		}
+		if isValidMemorySize(val) {
+			continue
+		}
+
 		errors = append(errors, plugin.ValidationError{
-			Path:    "wal_level",
-			Message: "wal_level must be 'replica' or 'logical' when max_wal_senders > 0 for replication",
-			Value:   walLevel,
+			Path:    field,
+			Message: fmt.Sprintf("invalid memory size format: %s (expected: 128MB, 1GB, 4kB, etc.)", val),
+			Value:   val,
+		})
+	}
+	return errors
+}
+
+func validatePostgresSynchronousCommit(configMap map[string]any) []plugin.ValidationError {
+	syncCommit, ok := configMap["synchronous_commit"].(string)
+	if !ok {
+		return nil
+	}
+
+	validOptions := []string{"off", "local", "remote_write", "remote_apply", "on"}
+	if pgContainsFold(validOptions, syncCommit) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "synchronous_commit",
+		Message: fmt.Sprintf("invalid synchronous_commit: %s (must be one of: %s)", syncCommit, strings.Join(validOptions, ", ")),
+		Value:   syncCommit,
+	}}
+}
+
+func validatePostgresArchiveMode(configMap map[string]any) []plugin.ValidationError {
+	archiveMode, ok := configMap["archive_mode"].(string)
+	if !ok {
+		return nil
+	}
+
+	validOptions := []string{"off", "on", "always"}
+	if pgContainsFold(validOptions, archiveMode) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "archive_mode",
+		Message: fmt.Sprintf("invalid archive_mode: %s (must be one of: %s)", archiveMode, strings.Join(validOptions, ", ")),
+		Value:   archiveMode,
+	}}
+}
+
+func validatePostgresPasswordEncryption(configMap map[string]any) []plugin.ValidationError {
+	passEnc, ok := configMap["password_encryption"].(string)
+	if !ok {
+		return nil
+	}
+
+	validOptions := []string{"md5", "scram-sha-256"}
+	if pgContainsFold(validOptions, passEnc) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "password_encryption",
+		Message: fmt.Sprintf("invalid password_encryption: %s (must be one of: %s)", passEnc, strings.Join(validOptions, ", ")),
+		Value:   passEnc,
+	}}
+}
+
+func validatePostgresLogStatement(configMap map[string]any) []plugin.ValidationError {
+	logStmt, ok := configMap["log_statement"].(string)
+	if !ok {
+		return nil
+	}
+
+	validOptions := []string{"none", "ddl", "mod", "all"}
+	if pgContainsFold(validOptions, logStmt) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "log_statement",
+		Message: fmt.Sprintf("invalid log_statement: %s (must be one of: %s)", logStmt, strings.Join(validOptions, ", ")),
+		Value:   logStmt,
+	}}
+}
+
+func validatePostgresCheckpointCompletionTarget(configMap map[string]any) []plugin.ValidationError {
+	cct, ok := pgAnyToFloat(configMap["checkpoint_completion_target"])
+	if !ok {
+		return nil
+	}
+	if cct >= 0 && cct <= 1 {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "checkpoint_completion_target",
+		Message: fmt.Sprintf("invalid checkpoint_completion_target: %v (must be between 0.0 and 1.0)", configMap["checkpoint_completion_target"]),
+		Value:   configMap["checkpoint_completion_target"],
+	}}
+}
+
+func validatePostgresSharedBuffers(configMap map[string]any) []plugin.ValidationError {
+	sharedBuffers, ok := configMap["shared_buffers"].(string)
+	if !ok {
+		return nil
+	}
+
+	sharedBytes := parseMemorySize(sharedBuffers)
+	if sharedBytes <= 0 {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	if sharedBytes < 128*1024*1024 {
+		errors = append(errors, plugin.ValidationError{
+			Path:    "shared_buffers",
+			Message: fmt.Sprintf("shared_buffers (%s) is below recommended minimum of 128MB for production workloads", sharedBuffers),
+			Value:   sharedBuffers,
 		})
 	}
 
-	// Check archive configuration
+	effectiveCache, ok := configMap["effective_cache_size"].(string)
+	if !ok {
+		return errors
+	}
+
+	cacheBytes := parseMemorySize(effectiveCache)
+	if cacheBytes > 0 && cacheBytes < sharedBytes {
+		errors = append(errors, plugin.ValidationError{
+			Path:    "effective_cache_size",
+			Message: fmt.Sprintf("effective_cache_size (%s) should typically be larger than shared_buffers (%s)", effectiveCache, sharedBuffers),
+			Value:   effectiveCache,
+		})
+	}
+	return errors
+}
+
+func validatePostgresReplicationWal(configMap map[string]any) []plugin.ValidationError {
+	walLevel, _ := configMap["wal_level"].(string)
+	maxWalSenders, _ := pgAnyToInt(configMap["max_wal_senders"])
+	if maxWalSenders <= 0 || !strings.EqualFold(walLevel, "minimal") {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "wal_level",
+		Message: "wal_level must be 'replica' or 'logical' when max_wal_senders > 0 for replication",
+		Value:   walLevel,
+	}}
+}
+
+func validatePostgresArchiveSettings(configMap map[string]any) []plugin.ValidationError {
 	archiveMode, _ := configMap["archive_mode"].(string)
 	archiveCommand, _ := configMap["archive_command"].(string)
-	if (archiveMode == "on" || archiveMode == "always") && archiveCommand == "" {
-		errors = append(errors, plugin.ValidationError{
-			Path:    "archive_mode",
-			Message: "archive_mode is enabled but archive_command is not set",
-			Value:   archiveMode,
-		})
+	if (archiveMode != "on" && archiveMode != "always") || archiveCommand != "" {
+		return nil
 	}
 
-	// Check security: SSL with listen_addresses
+	return []plugin.ValidationError{{
+		Path:    "archive_mode",
+		Message: "archive_mode is enabled but archive_command is not set",
+		Value:   archiveMode,
+	}}
+}
+
+func validatePostgresListenSSL(configMap map[string]any) []plugin.ValidationError {
 	listenAddresses, _ := configMap["listen_addresses"].(string)
-	sslEnabled := false
-	if ssl, ok := configMap["ssl"].(bool); ok {
-		sslEnabled = ssl
+	sslEnabled, _ := configMap["ssl"].(bool)
+	if (listenAddresses != "*" && listenAddresses != "0.0.0.0") || sslEnabled {
+		return nil
 	}
 
-	if (listenAddresses == "*" || listenAddresses == "0.0.0.0") && !sslEnabled {
-		errors = append(errors, plugin.ValidationError{
-			Path:    "listen_addresses",
-			Message: "listening on all interfaces without SSL is a security risk",
-			Value:   listenAddresses,
-		})
-	}
+	return []plugin.ValidationError{{
+		Path:    "listen_addresses",
+		Message: "listening on all interfaces without SSL is a security risk",
+		Value:   listenAddresses,
+	}}
+}
 
-	// Check synchronous replication configuration
+func validatePostgresSynchronousReplication(configMap map[string]any) []plugin.ValidationError {
 	syncStandbyNames, _ := configMap["synchronous_standby_names"].(string)
 	syncCommit, _ := configMap["synchronous_commit"].(string)
-	if syncStandbyNames != "" && (syncCommit == "off" || syncCommit == "local") {
-		errors = append(errors, plugin.ValidationError{
-			Path:    "synchronous_commit",
-			Message: "synchronous_standby_names is set but synchronous_commit doesn't enable remote synchronization",
-			Value:   syncCommit,
-		})
+	if syncStandbyNames == "" || (syncCommit != "off" && syncCommit != "local") {
+		return nil
 	}
 
-	// Check work_mem vs max_connections relationship
-	if workMem, ok := configMap["work_mem"].(string); ok {
-		workBytes := parseMemorySize(workMem)
-		if workBytes > 0 {
-			maxConn := 100
-			if mc, ok := configMap["max_connections"]; ok {
-				switch v := mc.(type) {
-				case int:
-					maxConn = v
-				case int64:
-					maxConn = int(v)
-				case float64:
-					maxConn = int(v)
-				}
-			}
-			// Very rough check: work_mem * max_connections * 2 should not exceed typical RAM
-			// This is a warning only
-			totalWorkMem := workBytes * int64(maxConn) * 2
-			if totalWorkMem > 64*1024*1024*1024 { // 64GB
-				errors = append(errors, plugin.ValidationError{
-					Path:    "work_mem",
-					Message: fmt.Sprintf("work_mem (%s) x max_connections (%d) could use significant memory (%s total)", workMem, maxConn, formatBytes(totalWorkMem)),
-					Value:   workMem,
-				})
-			}
+	return []plugin.ValidationError{{
+		Path:    "synchronous_commit",
+		Message: "synchronous_standby_names is set but synchronous_commit doesn't enable remote synchronization",
+		Value:   syncCommit,
+	}}
+}
+
+func validatePostgresWorkMemBudget(configMap map[string]any) []plugin.ValidationError {
+	workMem, ok := configMap["work_mem"].(string)
+	if !ok {
+		return nil
+	}
+
+	workBytes := parseMemorySize(workMem)
+	if workBytes <= 0 {
+		return nil
+	}
+
+	maxConn := 100
+	if parsed, ok := pgAnyToInt(configMap["max_connections"]); ok {
+		maxConn = parsed
+	}
+
+	totalWorkMem := workBytes * int64(maxConn) * 2
+	if totalWorkMem <= 64*1024*1024*1024 {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "work_mem",
+		Message: fmt.Sprintf("work_mem (%s) x max_connections (%d) could use significant memory (%s total)", workMem, maxConn, formatBytes(totalWorkMem)),
+		Value:   workMem,
+	}}
+}
+
+func pgAnyToInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
+func pgAnyToFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
+func pgContainsFold(values []string, candidate string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, candidate) {
+			return true
 		}
 	}
-
-	return errors, nil
+	return false
 }
 
 // isValidMemorySize checks if a string is a valid PostgreSQL memory size.

@@ -112,7 +112,6 @@ func LoadKnownHostsFile(path string) (ssh.HostKeyCallback, error) {
 
 // DefaultKnownHostsCallback returns a host key callback using the default known_hosts file.
 // Returns an error if the known_hosts file does not exist.
-// Use insecure_skip_host_key = true in service configuration for explicit insecure mode.
 func DefaultKnownHostsCallback() (ssh.HostKeyCallback, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -121,9 +120,9 @@ func DefaultKnownHostsCallback() (ssh.HostKeyCallback, error) {
 
 	knownHostsPath := filepath.Join(home, ".ssh", "known_hosts")
 
-	// Check if the file exists - SECURITY: Do NOT fall back to insecure mode
+	// Check if the file exists - SECURITY: do not fall back to insecure mode.
 	if _, err := os.Stat(knownHostsPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("known_hosts file not found at %s. Either create the file, specify known_hosts_file, or set insecure_skip_host_key = true (not recommended)", knownHostsPath)
+		return nil, fmt.Errorf("known_hosts file not found at %s. Create the file or specify known_hosts_file", knownHostsPath)
 	}
 
 	return knownhosts.New(knownHostsPath)
@@ -198,7 +197,7 @@ type AuthConfig struct {
 	HostKey          string // Single host key string
 	KnownHostsPath   string // Path to known_hosts file
 	KnownHostsData   []byte // Inline known_hosts data
-	InsecureNoVerify bool   // Skip host key verification (not recommended)
+	InsecureNoVerify bool   // Insecure mode is intentionally unsupported.
 }
 
 // BuildAuthMethods builds a list of authentication methods from the config.
@@ -250,9 +249,9 @@ func BuildAuthMethods(config AuthConfig) ([]ssh.AuthMethod, error) {
 
 // BuildHostKeyCallback builds a host key callback from the config.
 func BuildHostKeyCallback(config AuthConfig) (ssh.HostKeyCallback, error) {
-	// Insecure mode
+	// Insecure mode is blocked by default for security reasons.
 	if config.InsecureNoVerify {
-		return ssh.InsecureIgnoreHostKey(), nil
+		return nil, fmt.Errorf("insecure host key verification is not supported")
 	}
 
 	// Single host key

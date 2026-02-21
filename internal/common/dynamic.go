@@ -36,76 +36,22 @@ func attrValueToGo(ctx context.Context, val attr.Value) (any, error) {
 		return v.ValueBool(), nil
 
 	case basetypes.NumberValue:
-		bf := v.ValueBigFloat()
-		if bf == nil {
-			return nil, nil
-		}
-		if bf.IsInt() {
-			i, _ := bf.Int64()
-			return i, nil
-		}
-		f, _ := bf.Float64()
-		return f, nil
+		return numberValueToGo(v), nil
 
 	case basetypes.TupleValue:
-		elems := v.Elements()
-		result := make([]any, len(elems))
-		for i, elem := range elems {
-			goVal, err := attrValueToGo(ctx, elem)
-			if err != nil {
-				return nil, fmt.Errorf("tuple element %d: %w", i, err)
-			}
-			result[i] = goVal
-		}
-		return result, nil
+		return attrSliceToGo(ctx, v.Elements(), "tuple")
 
 	case basetypes.ObjectValue:
-		attrs := v.Attributes()
-		result := make(map[string]any, len(attrs))
-		for k, attr := range attrs {
-			goVal, err := attrValueToGo(ctx, attr)
-			if err != nil {
-				return nil, fmt.Errorf("object key %q: %w", k, err)
-			}
-			result[k] = goVal
-		}
-		return result, nil
+		return attrMapToGo(ctx, v.Attributes(), "object")
 
 	case basetypes.ListValue:
-		elems := v.Elements()
-		result := make([]any, len(elems))
-		for i, elem := range elems {
-			goVal, err := attrValueToGo(ctx, elem)
-			if err != nil {
-				return nil, fmt.Errorf("list element %d: %w", i, err)
-			}
-			result[i] = goVal
-		}
-		return result, nil
+		return attrSliceToGo(ctx, v.Elements(), "list")
 
 	case basetypes.MapValue:
-		elems := v.Elements()
-		result := make(map[string]any, len(elems))
-		for k, elem := range elems {
-			goVal, err := attrValueToGo(ctx, elem)
-			if err != nil {
-				return nil, fmt.Errorf("map key %q: %w", k, err)
-			}
-			result[k] = goVal
-		}
-		return result, nil
+		return attrMapToGo(ctx, v.Elements(), "map")
 
 	case basetypes.SetValue:
-		elems := v.Elements()
-		result := make([]any, len(elems))
-		for i, elem := range elems {
-			goVal, err := attrValueToGo(ctx, elem)
-			if err != nil {
-				return nil, fmt.Errorf("set element %d: %w", i, err)
-			}
-			result[i] = goVal
-		}
-		return result, nil
+		return attrSliceToGo(ctx, v.Elements(), "set")
 
 	case basetypes.DynamicValue:
 		return attrValueToGo(ctx, v.UnderlyingValue())
@@ -113,6 +59,43 @@ func attrValueToGo(ctx context.Context, val attr.Value) (any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported attr.Value type: %T", val)
 	}
+}
+
+func numberValueToGo(v basetypes.NumberValue) any {
+	bf := v.ValueBigFloat()
+	if bf == nil {
+		return nil
+	}
+	if bf.IsInt() {
+		i, _ := bf.Int64()
+		return i
+	}
+	f, _ := bf.Float64()
+	return f
+}
+
+func attrSliceToGo(ctx context.Context, elems []attr.Value, kind string) ([]any, error) {
+	result := make([]any, len(elems))
+	for i, elem := range elems {
+		goVal, err := attrValueToGo(ctx, elem)
+		if err != nil {
+			return nil, fmt.Errorf("%s element %d: %w", kind, i, err)
+		}
+		result[i] = goVal
+	}
+	return result, nil
+}
+
+func attrMapToGo(ctx context.Context, elems map[string]attr.Value, kind string) (map[string]any, error) {
+	result := make(map[string]any, len(elems))
+	for key, elem := range elems {
+		goVal, err := attrValueToGo(ctx, elem)
+		if err != nil {
+			return nil, fmt.Errorf("%s key %q: %w", kind, key, err)
+		}
+		result[key] = goVal
+	}
+	return result, nil
 }
 
 // GoValueToTerraformDynamic converts a Go value (from JSON/YAML/etc parsing)

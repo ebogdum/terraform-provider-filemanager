@@ -40,6 +40,8 @@ const (
 	OpDeleteTags      = "delete_tags"
 	OpSetStorageClass = "set_storage_class"
 	OpRestore         = "restore"
+
+	maxRestoreDaysInt32 = int64(2147483647)
 )
 
 // NewS3OperationResource creates a new S3 operation resource.
@@ -423,6 +425,9 @@ func (r *S3OperationResource) validateOperation(ctx context.Context, data *S3Ope
 		if data.RestoreDays.IsNull() || data.RestoreDays.ValueInt64() <= 0 {
 			return fmt.Errorf("restore_days must be a positive integer for restore operation")
 		}
+		if data.RestoreDays.ValueInt64() > maxRestoreDaysInt32 {
+			return fmt.Errorf("restore_days must be <= %d for restore operation", maxRestoreDaysInt32)
+		}
 	case OpHead, OpDeleteTags:
 		// No additional validation required
 	}
@@ -603,12 +608,24 @@ func (r *S3OperationResource) performRestore(ctx context.Context, backend plugin
 
 	// Default tier is "standard" if not specified
 	tier := "standard"
+	restoreDays, err := restoreDaysToInt32(data.RestoreDays.ValueInt64())
+	if err != nil {
+		return err
+	}
 
-	if err := s3Backend.RestoreObject(ctx, data.Key.ValueString(), int32(data.RestoreDays.ValueInt64()), tier); err != nil {
+	if err := s3Backend.RestoreObject(ctx, data.Key.ValueString(), restoreDays, tier); err != nil {
 		return fmt.Errorf("failed to restore object: %w", err)
 	}
 
 	return r.refreshObjectInfo(ctx, backend, data)
+}
+
+func restoreDaysToInt32(v int64) (int32, error) {
+	if v <= 0 || v > maxRestoreDaysInt32 {
+		return 0, fmt.Errorf("restore_days must be between 1 and %d", maxRestoreDaysInt32)
+	}
+	// #nosec G115 -- bounds validated above.
+	return int32(v), nil
 }
 
 // refreshObjectInfo retrieves current object information.

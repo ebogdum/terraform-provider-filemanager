@@ -204,90 +204,76 @@ func (p *Plugin) Validate(config any) ([]plugin.ValidationError, error) {
 }
 
 func (p *Plugin) validateService(service map[string]any) []plugin.ValidationError {
+	errors := make([]plugin.ValidationError, 0)
+	errors = append(errors, validateServiceEnumField(service, "Type", "service type", []string{"simple", "exec", "forking", "oneshot", "dbus", "notify", "idle"})...)
+	errors = append(errors, validateServiceEnumField(service, "Restart", "Restart value", []string{"no", "on-success", "on-failure", "on-abnormal", "on-watchdog", "on-abort", "always"})...)
+	errors = append(errors, validateServiceEnumField(service, "KillMode", "KillMode", []string{"control-group", "mixed", "process", "none"})...)
+	errors = append(errors, validateServiceTimeFields(service)...)
+	errors = append(errors, validateServiceExecStart(service)...)
+	return errors
+}
+
+func validateServiceEnumField(service map[string]any, field, label string, valid []string) []plugin.ValidationError {
+	value, ok := service[field]
+	if !ok {
+		return nil
+	}
+
+	valueStr := fmt.Sprintf("%v", value)
+	if containsString(valid, valueStr) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "Service." + field,
+		Message: fmt.Sprintf("invalid %s: %s (valid: %v)", label, valueStr, valid),
+	}}
+}
+
+func validateServiceTimeFields(service map[string]any) []plugin.ValidationError {
 	var errors []plugin.ValidationError
 
-	// Validate Type
-	if svcType, ok := service["Type"]; ok {
-		validTypes := []string{"simple", "exec", "forking", "oneshot", "dbus", "notify", "idle"}
-		typeStr := fmt.Sprintf("%v", svcType)
-		found := false
-		for _, t := range validTypes {
-			if t == typeStr {
-				found = true
-				break
-			}
+	for _, field := range []string{"RestartSec", "TimeoutStartSec", "TimeoutStopSec", "WatchdogSec"} {
+		value, ok := service[field]
+		if !ok {
+			continue
 		}
-		if !found {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "Service.Type",
-				Message: fmt.Sprintf("invalid service type: %s (valid: %v)", typeStr, validTypes),
-			})
+		if isValidTimeSpec(fmt.Sprintf("%v", value)) {
+			continue
 		}
-	}
 
-	// Validate Restart
-	if restart, ok := service["Restart"]; ok {
-		validRestarts := []string{"no", "on-success", "on-failure", "on-abnormal", "on-watchdog", "on-abort", "always"}
-		restartStr := fmt.Sprintf("%v", restart)
-		found := false
-		for _, r := range validRestarts {
-			if r == restartStr {
-				found = true
-				break
-			}
-		}
-		if !found {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "Service.Restart",
-				Message: fmt.Sprintf("invalid Restart value: %s (valid: %v)", restartStr, validRestarts),
-			})
-		}
-	}
-
-	// Validate KillMode
-	if killMode, ok := service["KillMode"]; ok {
-		validModes := []string{"control-group", "mixed", "process", "none"}
-		modeStr := fmt.Sprintf("%v", killMode)
-		found := false
-		for _, m := range validModes {
-			if m == modeStr {
-				found = true
-				break
-			}
-		}
-		if !found {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "Service.KillMode",
-				Message: fmt.Sprintf("invalid KillMode: %s (valid: %v)", modeStr, validModes),
-			})
-		}
-	}
-
-	// Validate time specifications
-	timeFields := []string{"RestartSec", "TimeoutStartSec", "TimeoutStopSec", "WatchdogSec"}
-	for _, field := range timeFields {
-		if val, ok := service[field]; ok {
-			if !isValidTimeSpec(fmt.Sprintf("%v", val)) {
-				errors = append(errors, plugin.ValidationError{
-					Path:    "Service." + field,
-					Message: fmt.Sprintf("invalid time specification: %v", val),
-				})
-			}
-		}
-	}
-
-	// Validate ExecStart is present for non-oneshot types or has at least one Exec*
-	svcType := fmt.Sprintf("%v", service["Type"])
-	if svcType != "oneshot" {
-		if _, hasExecStart := service["ExecStart"]; !hasExecStart {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "Service.ExecStart",
-				Message: "ExecStart is required for non-oneshot service types",
-			})
-		}
+		errors = append(errors, plugin.ValidationError{
+			Path:    "Service." + field,
+			Message: fmt.Sprintf("invalid time specification: %v", value),
+		})
 	}
 
 	return errors
+}
+
+func validateServiceExecStart(service map[string]any) []plugin.ValidationError {
+	svcType := fmt.Sprintf("%v", service["Type"])
+	if svcType == "oneshot" {
+		return nil
+	}
+
+	if _, hasExecStart := service["ExecStart"]; hasExecStart {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "Service.ExecStart",
+		Message: "ExecStart is required for non-oneshot service types",
+	}}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Plugin) validateTimer(timer map[string]any) []plugin.ValidationError {
@@ -490,12 +476,16 @@ func (p *Plugin) ToNative(config any) ([]byte, error) {
 
 		for _, key := range keys {
 			value := sectionMap[key]
-			section.NewKey(key, fmt.Sprintf("%v", value))
+			if _, err := section.NewKey(key, fmt.Sprintf("%v", value)); err != nil {
+				return nil, fmt.Errorf("failed to set key %s in section %s: %w", key, sectionName, err)
+			}
 		}
 	}
 
 	var buf strings.Builder
-	cfg.WriteTo(&buf)
+	if _, err := cfg.WriteTo(&buf); err != nil {
+		return nil, fmt.Errorf("failed to render systemd unit: %w", err)
+	}
 	return []byte(buf.String()), nil
 }
 

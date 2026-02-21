@@ -283,89 +283,11 @@ func (p *Plugin) validateFrontends(frontends []any) []plugin.ValidationError {
 			continue
 		}
 
-		// Validate name
-		name, ok := feMap["name"].(string)
-		if !ok || name == "" {
-			errors = append(errors, plugin.ValidationError{
-				Path:    fmt.Sprintf("frontend[%d].name", i),
-				Message: "frontend name is required",
-			})
-		} else {
-			if usedNames[name] {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("frontend[%d].name", i),
-					Message: fmt.Sprintf("duplicate frontend name: %s", name),
-				})
-			}
-			usedNames[name] = true
-		}
-
-		// Validate bind
-		if bind, ok := feMap["bind"].(string); ok {
-			if !isValidBind(bind) {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("frontend[%d].bind", i),
-					Message: fmt.Sprintf("invalid bind address: %s", bind),
-				})
-			}
-			if usedBinds[bind] {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("frontend[%d].bind", i),
-					Message: fmt.Sprintf("duplicate bind address: %s", bind),
-				})
-			}
-			usedBinds[bind] = true
-		} else if binds, ok := feMap["bind"].([]any); ok {
-			for j, b := range binds {
-				if bindStr, ok := b.(string); ok {
-					if !isValidBind(bindStr) {
-						errors = append(errors, plugin.ValidationError{
-							Path:    fmt.Sprintf("frontend[%d].bind[%d]", i, j),
-							Message: fmt.Sprintf("invalid bind address: %s", bindStr),
-						})
-					}
-				}
-			}
-		} else {
-			errors = append(errors, plugin.ValidationError{
-				Path:    fmt.Sprintf("frontend[%d].bind", i),
-				Message: "frontend bind is required",
-			})
-		}
-
-		// Validate default_backend
-		if _, ok := feMap["default_backend"]; !ok {
-			// Check if there are use_backend rules
-			if _, hasUseBackend := feMap["use_backend"]; !hasUseBackend {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("frontend[%d].default_backend", i),
-					Message: "frontend should have default_backend or use_backend rules",
-				})
-			}
-		}
-
-		// Validate mode if specified
-		if mode, ok := feMap["mode"].(string); ok {
-			validModes := []string{"tcp", "http"}
-			found := false
-			for _, vm := range validModes {
-				if mode == vm {
-					found = true
-					break
-				}
-			}
-			if !found {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("frontend[%d].mode", i),
-					Message: fmt.Sprintf("invalid mode: %s", mode),
-				})
-			}
-		}
-
-		// Validate ACLs
-		if acls, ok := feMap["acl"].([]any); ok {
-			errors = append(errors, p.validateACLs(acls, fmt.Sprintf("frontend[%d]", i))...)
-		}
+		errors = append(errors, validateFrontendName(feMap, i, usedNames)...)
+		errors = append(errors, validateFrontendBind(feMap, i, usedBinds)...)
+		errors = append(errors, validateFrontendDefaultBackend(feMap, i)...)
+		errors = append(errors, validateFrontendMode(feMap, i)...)
+		errors = append(errors, p.validateFrontendACLs(feMap, i)...)
 	}
 
 	return errors
@@ -518,71 +440,200 @@ func (p *Plugin) validateServers(servers []any, parentPath string) []plugin.Vali
 	usedNames := make(map[string]bool)
 
 	for i, server := range servers {
-		serverMap, ok := server.(map[string]any)
-		if !ok {
-			// Server might be a string in simple format
-			if serverStr, ok := server.(string); ok {
-				if !isValidServerLine(serverStr) {
-					errors = append(errors, plugin.ValidationError{
-						Path:    fmt.Sprintf("%s.server[%d]", parentPath, i),
-						Message: fmt.Sprintf("invalid server definition: %s", serverStr),
-					})
-				}
-			}
-			continue
-		}
-
-		// Validate name
-		name, ok := serverMap["name"].(string)
-		if !ok || name == "" {
-			errors = append(errors, plugin.ValidationError{
-				Path:    fmt.Sprintf("%s.server[%d].name", parentPath, i),
-				Message: "server name is required",
-			})
-		} else {
-			if usedNames[name] {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("%s.server[%d].name", parentPath, i),
-					Message: fmt.Sprintf("duplicate server name: %s", name),
-				})
-			}
-			usedNames[name] = true
-		}
-
-		// Validate address
-		if address, ok := serverMap["address"].(string); ok {
-			if !isValidServerAddress(address) {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("%s.server[%d].address", parentPath, i),
-					Message: fmt.Sprintf("invalid server address: %s", address),
-				})
-			}
-		} else {
-			errors = append(errors, plugin.ValidationError{
-				Path:    fmt.Sprintf("%s.server[%d].address", parentPath, i),
-				Message: "server address is required",
-			})
-		}
-
-		// Validate weight if present
-		if weight, ok := serverMap["weight"]; ok {
-			var w int
-			switch v := weight.(type) {
-			case int:
-				w = v
-			case float64:
-				w = int(v)
-			}
-			if w < 0 || w > 256 {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("%s.server[%d].weight", parentPath, i),
-					Message: "server weight must be between 0 and 256",
-				})
-			}
-		}
+		errors = append(errors, validateServerEntry(server, i, parentPath, usedNames)...)
 	}
 
 	return errors
+}
+
+func validateFrontendName(feMap map[string]any, index int, usedNames map[string]bool) []plugin.ValidationError {
+	path := fmt.Sprintf("frontend[%d].name", index)
+	name, ok := feMap["name"].(string)
+	if !ok || name == "" {
+		return []plugin.ValidationError{{
+			Path:    path,
+			Message: "frontend name is required",
+		}}
+	}
+
+	if usedNames[name] {
+		return []plugin.ValidationError{{
+			Path:    path,
+			Message: fmt.Sprintf("duplicate frontend name: %s", name),
+		}}
+	}
+
+	usedNames[name] = true
+	return nil
+}
+
+func validateFrontendBind(feMap map[string]any, index int, usedBinds map[string]bool) []plugin.ValidationError {
+	if bind, ok := feMap["bind"].(string); ok {
+		return validateFrontendBindString(bind, index, usedBinds)
+	}
+
+	if binds, ok := feMap["bind"].([]any); ok {
+		return validateFrontendBindList(binds, index)
+	}
+
+	return []plugin.ValidationError{{
+		Path:    fmt.Sprintf("frontend[%d].bind", index),
+		Message: "frontend bind is required",
+	}}
+}
+
+func validateFrontendBindString(bind string, index int, usedBinds map[string]bool) []plugin.ValidationError {
+	var errors []plugin.ValidationError
+	path := fmt.Sprintf("frontend[%d].bind", index)
+
+	if !isValidBind(bind) {
+		errors = append(errors, plugin.ValidationError{
+			Path:    path,
+			Message: fmt.Sprintf("invalid bind address: %s", bind),
+		})
+	}
+	if usedBinds[bind] {
+		errors = append(errors, plugin.ValidationError{
+			Path:    path,
+			Message: fmt.Sprintf("duplicate bind address: %s", bind),
+		})
+	}
+	usedBinds[bind] = true
+	return errors
+}
+
+func validateFrontendBindList(binds []any, index int) []plugin.ValidationError {
+	var errors []plugin.ValidationError
+	for j, bind := range binds {
+		bindStr, ok := bind.(string)
+		if !ok || isValidBind(bindStr) {
+			continue
+		}
+		errors = append(errors, plugin.ValidationError{
+			Path:    fmt.Sprintf("frontend[%d].bind[%d]", index, j),
+			Message: fmt.Sprintf("invalid bind address: %s", bindStr),
+		})
+	}
+	return errors
+}
+
+func validateFrontendDefaultBackend(feMap map[string]any, index int) []plugin.ValidationError {
+	if _, hasDefaultBackend := feMap["default_backend"]; hasDefaultBackend {
+		return nil
+	}
+	if _, hasUseBackend := feMap["use_backend"]; hasUseBackend {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    fmt.Sprintf("frontend[%d].default_backend", index),
+		Message: "frontend should have default_backend or use_backend rules",
+	}}
+}
+
+func validateFrontendMode(feMap map[string]any, index int) []plugin.ValidationError {
+	mode, ok := feMap["mode"].(string)
+	if !ok {
+		return nil
+	}
+
+	validModes := []string{"tcp", "http"}
+	for _, validMode := range validModes {
+		if mode == validMode {
+			return nil
+		}
+	}
+
+	return []plugin.ValidationError{{
+		Path:    fmt.Sprintf("frontend[%d].mode", index),
+		Message: fmt.Sprintf("invalid mode: %s", mode),
+	}}
+}
+
+func (p *Plugin) validateFrontendACLs(feMap map[string]any, index int) []plugin.ValidationError {
+	acls, ok := feMap["acl"].([]any)
+	if !ok {
+		return nil
+	}
+	return p.validateACLs(acls, fmt.Sprintf("frontend[%d]", index))
+}
+
+func validateServerEntry(server any, index int, parentPath string, usedNames map[string]bool) []plugin.ValidationError {
+	serverMap, ok := server.(map[string]any)
+	if !ok {
+		if serverStr, ok := server.(string); ok && !isValidServerLine(serverStr) {
+			return []plugin.ValidationError{{
+				Path:    fmt.Sprintf("%s.server[%d]", parentPath, index),
+				Message: fmt.Sprintf("invalid server definition: %s", serverStr),
+			}}
+		}
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	errors = append(errors, validateServerName(serverMap, index, parentPath, usedNames)...)
+	errors = append(errors, validateServerAddress(serverMap, index, parentPath)...)
+	errors = append(errors, validateServerWeight(serverMap, index, parentPath)...)
+	return errors
+}
+
+func validateServerName(serverMap map[string]any, index int, parentPath string, usedNames map[string]bool) []plugin.ValidationError {
+	path := fmt.Sprintf("%s.server[%d].name", parentPath, index)
+	name, ok := serverMap["name"].(string)
+	if !ok || name == "" {
+		return []plugin.ValidationError{{
+			Path:    path,
+			Message: "server name is required",
+		}}
+	}
+
+	if usedNames[name] {
+		return []plugin.ValidationError{{
+			Path:    path,
+			Message: fmt.Sprintf("duplicate server name: %s", name),
+		}}
+	}
+
+	usedNames[name] = true
+	return nil
+}
+
+func validateServerAddress(serverMap map[string]any, index int, parentPath string) []plugin.ValidationError {
+	path := fmt.Sprintf("%s.server[%d].address", parentPath, index)
+	address, ok := serverMap["address"].(string)
+	if !ok {
+		return []plugin.ValidationError{{
+			Path:    path,
+			Message: "server address is required",
+		}}
+	}
+	if isValidServerAddress(address) {
+		return nil
+	}
+	return []plugin.ValidationError{{
+		Path:    path,
+		Message: fmt.Sprintf("invalid server address: %s", address),
+	}}
+}
+
+func validateServerWeight(serverMap map[string]any, index int, parentPath string) []plugin.ValidationError {
+	weight, ok := serverMap["weight"]
+	if !ok {
+		return nil
+	}
+
+	w, ok := haproxyAnyToInt(weight)
+	if !ok {
+		w = 0
+	}
+	if w >= 0 && w <= 256 {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    fmt.Sprintf("%s.server[%d].weight", parentPath, index),
+		Message: "server weight must be between 0 and 256",
+	}}
 }
 
 func (p *Plugin) validateACLs(acls []any, parentPath string) []plugin.ValidationError {
@@ -626,28 +677,36 @@ func (p *Plugin) validateACLs(acls []any, parentPath string) []plugin.Validation
 
 // ValidateSemantic performs semantic validation.
 func (p *Plugin) ValidateSemantic(config any) ([]plugin.ValidationError, error) {
-	var errors []plugin.ValidationError
-
 	configMap, ok := config.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("config must be a map")
 	}
 
-	// Collect all backend names
+	backendNames := collectBackendNames(configMap)
+
+	var errors []plugin.ValidationError
+	errors = append(errors, validateFrontendBackendReferences(configMap, backendNames)...)
+	errors = append(errors, validateHAProxyGlobalSecurity(configMap)...)
+	return errors, nil
+}
+
+func collectBackendNames(configMap map[string]any) map[string]bool {
 	backendNames := make(map[string]bool)
-	if backends, ok := configMap["backend"].([]any); ok {
+
+	backends, ok := configMap["backend"].([]any)
+	if ok {
 		for _, backend := range backends {
-			if beMap, ok := backend.(map[string]any); ok {
-				if name, ok := beMap["name"].(string); ok {
+			if backendMap, ok := backend.(map[string]any); ok {
+				if name, ok := backendMap["name"].(string); ok {
 					backendNames[name] = true
 				}
 			}
 		}
 	}
 
-	// Also collect listen section names (they can be used as backends)
-	if listen, ok := configMap["listen"].([]any); ok {
-		for _, section := range listen {
+	listenSections, ok := configMap["listen"].([]any)
+	if ok {
+		for _, section := range listenSections {
 			if listenMap, ok := section.(map[string]any); ok {
 				if name, ok := listenMap["name"].(string); ok {
 					backendNames[name] = true
@@ -656,66 +715,91 @@ func (p *Plugin) ValidateSemantic(config any) ([]plugin.ValidationError, error) 
 		}
 	}
 
-	// Check that all referenced backends exist
-	if frontends, ok := configMap["frontend"].([]any); ok {
-		for i, frontend := range frontends {
-			feMap, ok := frontend.(map[string]any)
-			if !ok {
-				continue
-			}
+	return backendNames
+}
 
-			// Check default_backend
-			if defaultBackend, ok := feMap["default_backend"].(string); ok {
-				if !backendNames[defaultBackend] {
-					errors = append(errors, plugin.ValidationError{
-						Path:    fmt.Sprintf("frontend[%d].default_backend", i),
-						Message: fmt.Sprintf("backend '%s' does not exist", defaultBackend),
-					})
-				}
-			}
-
-			// Check use_backend rules
-			if useBackends, ok := feMap["use_backend"].([]any); ok {
-				for j, ub := range useBackends {
-					if ubMap, ok := ub.(map[string]any); ok {
-						if backend, ok := ubMap["backend"].(string); ok {
-							if !backendNames[backend] {
-								errors = append(errors, plugin.ValidationError{
-									Path:    fmt.Sprintf("frontend[%d].use_backend[%d].backend", i, j),
-									Message: fmt.Sprintf("backend '%s' does not exist", backend),
-								})
-							}
-						}
-					}
-				}
-			}
-		}
+func validateFrontendBackendReferences(configMap map[string]any, backendNames map[string]bool) []plugin.ValidationError {
+	frontends, ok := configMap["frontend"].([]any)
+	if !ok {
+		return nil
 	}
 
-	// Security warnings
-	if global, ok := configMap["global"].(map[string]any); ok {
-		// Check if running as root
-		if user, ok := global["user"].(string); ok && user == "root" {
-			errors = append(errors, plugin.ValidationError{
-				Path:    "global.user",
-				Message: "running HAProxy as root is not recommended",
-			})
+	var errors []plugin.ValidationError
+	for i, frontend := range frontends {
+		feMap, ok := frontend.(map[string]any)
+		if !ok {
+			continue
 		}
+		errors = append(errors, validateFrontendDefaultBackendReference(feMap, i, backendNames)...)
+		errors = append(errors, validateFrontendUseBackendReferences(feMap, i, backendNames)...)
+	}
+	return errors
+}
 
-		// Check for stats socket security
-		if stats, ok := global["stats"].(map[string]any); ok {
-			if socket, ok := stats["socket"].(string); ok {
-				if !strings.Contains(socket, "level") {
-					errors = append(errors, plugin.ValidationError{
-						Path:    "global.stats.socket",
-						Message: "consider setting access level for stats socket",
-					})
-				}
-			}
-		}
+func validateFrontendDefaultBackendReference(feMap map[string]any, index int, backendNames map[string]bool) []plugin.ValidationError {
+	defaultBackend, ok := feMap["default_backend"].(string)
+	if !ok || backendNames[defaultBackend] {
+		return nil
 	}
 
-	return errors, nil
+	return []plugin.ValidationError{{
+		Path:    fmt.Sprintf("frontend[%d].default_backend", index),
+		Message: fmt.Sprintf("backend '%s' does not exist", defaultBackend),
+	}}
+}
+
+func validateFrontendUseBackendReferences(feMap map[string]any, index int, backendNames map[string]bool) []plugin.ValidationError {
+	useBackends, ok := feMap["use_backend"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for j, useBackend := range useBackends {
+		useBackendMap, ok := useBackend.(map[string]any)
+		if !ok {
+			continue
+		}
+		backend, ok := useBackendMap["backend"].(string)
+		if !ok || backendNames[backend] {
+			continue
+		}
+		errors = append(errors, plugin.ValidationError{
+			Path:    fmt.Sprintf("frontend[%d].use_backend[%d].backend", index, j),
+			Message: fmt.Sprintf("backend '%s' does not exist", backend),
+		})
+	}
+	return errors
+}
+
+func validateHAProxyGlobalSecurity(configMap map[string]any) []plugin.ValidationError {
+	global, ok := configMap["global"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	if user, ok := global["user"].(string); ok && user == "root" {
+		errors = append(errors, plugin.ValidationError{
+			Path:    "global.user",
+			Message: "running HAProxy as root is not recommended",
+		})
+	}
+
+	stats, ok := global["stats"].(map[string]any)
+	if !ok {
+		return errors
+	}
+
+	socket, ok := stats["socket"].(string)
+	if ok && !strings.Contains(socket, "level") {
+		errors = append(errors, plugin.ValidationError{
+			Path:    "global.stats.socket",
+			Message: "consider setting access level for stats socket",
+		})
+	}
+
+	return errors
 }
 
 // Normalize normalizes the configuration.
@@ -791,142 +875,187 @@ func writeSection(sb *strings.Builder, section map[string]any, indent int) {
 
 	for key, value := range section {
 		if key == "name" {
-			continue // Skip name, it's already in the section header
+			continue
 		}
+		writeSectionEntry(sb, prefix, key, value)
+	}
+}
 
-		switch v := value.(type) {
-		case string:
-			sb.WriteString(fmt.Sprintf("%s%s %s\n", prefix, key, v))
-		case bool:
-			if v {
-				sb.WriteString(fmt.Sprintf("%s%s\n", prefix, key))
-			}
-		case int, float64:
-			sb.WriteString(fmt.Sprintf("%s%s %v\n", prefix, key, v))
-		case []any:
-			for _, item := range v {
-				switch it := item.(type) {
-				case string:
-					sb.WriteString(fmt.Sprintf("%s%s %s\n", prefix, key, it))
-				case map[string]any:
-					// Handle structured items like servers
-					if key == "server" {
-						if name, ok := it["name"].(string); ok {
-							if addr, ok := it["address"].(string); ok {
-								line := fmt.Sprintf("%sserver %s %s", prefix, name, addr)
-								// Add optional parameters
-								if check, ok := it["check"].(bool); ok && check {
-									line += " check"
-								}
-								if weight, ok := it["weight"]; ok {
-									line += fmt.Sprintf(" weight %v", weight)
-								}
-								sb.WriteString(line + "\n")
-							}
-						}
-					}
-				}
-			}
-		case map[string]any:
-			// Handle nested maps like timeout
-			if key == "timeout" {
-				for tk, tv := range v {
-					sb.WriteString(fmt.Sprintf("%stimeout %s %v\n", prefix, tk, tv))
-				}
-			} else if key == "option" {
-				for ok, ov := range v {
-					if ob, isBool := ov.(bool); isBool && ob {
-						sb.WriteString(fmt.Sprintf("%soption %s\n", prefix, ok))
-					} else {
-						sb.WriteString(fmt.Sprintf("%soption %s %v\n", prefix, ok, ov))
-					}
-				}
-			} else if key == "stats" {
-				for sk, sv := range v {
-					sb.WriteString(fmt.Sprintf("%sstats %s %v\n", prefix, sk, sv))
-				}
-			} else {
-				// Generic nested map
-				for nk, nv := range v {
-					sb.WriteString(fmt.Sprintf("%s%s %s %v\n", prefix, key, nk, nv))
-				}
-			}
+func writeSectionEntry(sb *strings.Builder, prefix, key string, value any) {
+	switch v := value.(type) {
+	case string:
+		sb.WriteString(fmt.Sprintf("%s%s %s\n", prefix, key, v))
+	case bool:
+		if v {
+			sb.WriteString(fmt.Sprintf("%s%s\n", prefix, key))
 		}
+	case int, float64:
+		sb.WriteString(fmt.Sprintf("%s%s %v\n", prefix, key, v))
+	case []any:
+		writeSectionList(sb, prefix, key, v)
+	case map[string]any:
+		writeSectionMap(sb, prefix, key, v)
+	}
+}
+
+func writeSectionList(sb *strings.Builder, prefix, key string, items []any) {
+	for _, item := range items {
+		writeSectionListItem(sb, prefix, key, item)
+	}
+}
+
+func writeSectionListItem(sb *strings.Builder, prefix, key string, item any) {
+	switch typedItem := item.(type) {
+	case string:
+		sb.WriteString(fmt.Sprintf("%s%s %s\n", prefix, key, typedItem))
+	case map[string]any:
+		if key == "server" {
+			writeSectionServerItem(sb, prefix, typedItem)
+		}
+	}
+}
+
+func writeSectionServerItem(sb *strings.Builder, prefix string, server map[string]any) {
+	name, hasName := server["name"].(string)
+	address, hasAddress := server["address"].(string)
+	if !hasName || !hasAddress {
+		return
+	}
+
+	line := fmt.Sprintf("%sserver %s %s", prefix, name, address)
+	if check, ok := server["check"].(bool); ok && check {
+		line += " check"
+	}
+	if weight, ok := server["weight"]; ok {
+		line += fmt.Sprintf(" weight %v", weight)
+	}
+	sb.WriteString(line + "\n")
+}
+
+func writeSectionMap(sb *strings.Builder, prefix, key string, values map[string]any) {
+	switch key {
+	case "timeout":
+		writeSectionNamedMap(sb, prefix, "timeout", values)
+	case "option":
+		writeSectionOptions(sb, prefix, values)
+	case "stats":
+		writeSectionNamedMap(sb, prefix, "stats", values)
+	default:
+		writeSectionGenericMap(sb, prefix, key, values)
+	}
+}
+
+func writeSectionNamedMap(sb *strings.Builder, prefix, directive string, values map[string]any) {
+	for nestedKey, nestedValue := range values {
+		sb.WriteString(fmt.Sprintf("%s%s %s %v\n", prefix, directive, nestedKey, nestedValue))
+	}
+}
+
+func writeSectionOptions(sb *strings.Builder, prefix string, values map[string]any) {
+	for optionKey, optionValue := range values {
+		if enabled, isBool := optionValue.(bool); isBool && enabled {
+			sb.WriteString(fmt.Sprintf("%soption %s\n", prefix, optionKey))
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("%soption %s %v\n", prefix, optionKey, optionValue))
+	}
+}
+
+func writeSectionGenericMap(sb *strings.Builder, prefix, key string, values map[string]any) {
+	for nestedKey, nestedValue := range values {
+		sb.WriteString(fmt.Sprintf("%s%s %s %v\n", prefix, key, nestedKey, nestedValue))
 	}
 }
 
 // FromNative parses native HAProxy configuration format.
 func (p *Plugin) FromNative(data []byte) (any, error) {
-	// This is a simplified parser - a full parser would be more complex
 	config := make(map[string]any)
-	lines := strings.Split(string(data), "\n")
-
 	var currentSection string
 	var currentName string
 	var currentData map[string]any
+	var frontends []any
+	var backends []any
+	var listen []any
 
-	frontends := []any{}
-	backends := []any{}
-	listen := []any{}
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+	lines := strings.Split(string(data), "\n")
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if shouldSkipHAProxyLine(line) {
 			continue
 		}
 
-		// Check for section headers
-		if strings.HasPrefix(line, "global") {
-			if currentSection != "" && currentData != nil {
-				p.saveSection(config, currentSection, currentName, currentData, &frontends, &backends, &listen)
-			}
-			currentSection = "global"
-			currentName = ""
-			currentData = make(map[string]any)
-		} else if strings.HasPrefix(line, "defaults") {
-			if currentSection != "" && currentData != nil {
-				p.saveSection(config, currentSection, currentName, currentData, &frontends, &backends, &listen)
-			}
-			currentSection = "defaults"
-			currentName = ""
-			currentData = make(map[string]any)
-		} else if strings.HasPrefix(line, "frontend ") {
-			if currentSection != "" && currentData != nil {
-				p.saveSection(config, currentSection, currentName, currentData, &frontends, &backends, &listen)
-			}
-			currentSection = "frontend"
-			currentName = strings.TrimPrefix(line, "frontend ")
-			currentData = map[string]any{"name": currentName}
-		} else if strings.HasPrefix(line, "backend ") {
-			if currentSection != "" && currentData != nil {
-				p.saveSection(config, currentSection, currentName, currentData, &frontends, &backends, &listen)
-			}
-			currentSection = "backend"
-			currentName = strings.TrimPrefix(line, "backend ")
-			currentData = map[string]any{"name": currentName}
-		} else if strings.HasPrefix(line, "listen ") {
-			if currentSection != "" && currentData != nil {
-				p.saveSection(config, currentSection, currentName, currentData, &frontends, &backends, &listen)
-			}
-			currentSection = "listen"
-			currentName = strings.TrimPrefix(line, "listen ")
-			currentData = map[string]any{"name": currentName}
-		} else if currentData != nil {
-			// Parse directive
-			parts := strings.SplitN(line, " ", 2)
-			if len(parts) == 1 {
-				currentData[parts[0]] = true
-			} else {
-				currentData[parts[0]] = parts[1]
-			}
+		section, name, isHeader := parseHAProxySectionHeader(line)
+		if isHeader {
+			p.persistSection(config, currentSection, currentName, currentData, &frontends, &backends, &listen)
+			currentSection, currentName, currentData = startHAProxySection(section, name)
+			continue
+		}
+
+		if currentData != nil {
+			parseHAProxyDirective(line, currentData)
 		}
 	}
 
-	// Save last section
-	if currentSection != "" && currentData != nil {
-		p.saveSection(config, currentSection, currentName, currentData, &frontends, &backends, &listen)
-	}
+	p.persistSection(config, currentSection, currentName, currentData, &frontends, &backends, &listen)
+	setHAProxyParsedSections(config, frontends, backends, listen)
+	return config, nil
+}
 
+func shouldSkipHAProxyLine(line string) bool {
+	return line == "" || strings.HasPrefix(line, "#")
+}
+
+func parseHAProxySectionHeader(line string) (section string, name string, ok bool) {
+	switch {
+	case strings.HasPrefix(line, "global"):
+		return "global", "", true
+	case strings.HasPrefix(line, "defaults"):
+		return "defaults", "", true
+	case strings.HasPrefix(line, "frontend "):
+		return "frontend", strings.TrimPrefix(line, "frontend "), true
+	case strings.HasPrefix(line, "backend "):
+		return "backend", strings.TrimPrefix(line, "backend "), true
+	case strings.HasPrefix(line, "listen "):
+		return "listen", strings.TrimPrefix(line, "listen "), true
+	default:
+		return "", "", false
+	}
+}
+
+func startHAProxySection(section, name string) (string, string, map[string]any) {
+	switch section {
+	case "frontend", "backend", "listen":
+		return section, name, map[string]any{"name": name}
+	default:
+		return section, name, make(map[string]any)
+	}
+}
+
+func parseHAProxyDirective(line string, currentData map[string]any) {
+	parts := strings.SplitN(line, " ", 2)
+	if len(parts) == 1 {
+		currentData[parts[0]] = true
+		return
+	}
+	currentData[parts[0]] = parts[1]
+}
+
+func (p *Plugin) persistSection(
+	config map[string]any,
+	currentSection string,
+	currentName string,
+	currentData map[string]any,
+	frontends *[]any,
+	backends *[]any,
+	listen *[]any,
+) {
+	if currentSection == "" || currentData == nil {
+		return
+	}
+	p.saveSection(config, currentSection, currentName, currentData, frontends, backends, listen)
+}
+
+func setHAProxyParsedSections(config map[string]any, frontends []any, backends []any, listen []any) {
 	if len(frontends) > 0 {
 		config["frontend"] = frontends
 	}
@@ -936,8 +1065,6 @@ func (p *Plugin) FromNative(data []byte) (any, error) {
 	if len(listen) > 0 {
 		config["listen"] = listen
 	}
-
-	return config, nil
 }
 
 func (p *Plugin) saveSection(config map[string]any, section, name string, data map[string]any, frontends, backends, listen *[]any) {
@@ -1014,4 +1141,17 @@ func isValidServerAddress(address string) bool {
 	}
 	_, err = strconv.Atoi(portStr)
 	return err == nil
+}
+
+func haproxyAnyToInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
 }

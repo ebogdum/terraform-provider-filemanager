@@ -134,7 +134,7 @@ func (p *Plugin) DefaultConfig() any {
 	return map[string]any{
 		"Host": []any{
 			map[string]any{
-				"pattern":                "*",
+				"pattern":               "*",
 				"ServerAliveInterval":   60,
 				"ServerAliveCountMax":   3,
 				"AddKeysToAgent":        "yes",
@@ -195,116 +195,156 @@ func (p *Plugin) validateHostBlocks(hosts []any) []plugin.ValidationError {
 
 func (p *Plugin) validateDirectives(directives map[string]any, prefix string) []plugin.ValidationError {
 	var errors []plugin.ValidationError
+	errors = append(errors, validateSSHPort(directives, prefix)...)
+	errors = append(errors, validateSSHStrictHostKeyChecking(directives, prefix)...)
+	errors = append(errors, validateSSHAddKeysToAgent(directives, prefix)...)
+	errors = append(errors, validateSSHControlMaster(directives, prefix)...)
+	errors = append(errors, validateSSHRequestTTY(directives, prefix)...)
+	errors = append(errors, validateSSHLogLevel(directives, prefix)...)
+	errors = append(errors, validateSSHAddressFamily(directives, prefix)...)
+	errors = append(errors, validateSSHIntegerFields(directives, prefix)...)
+	return errors
+}
 
-	// Validate Port
-	if port, ok := directives["Port"]; ok {
-		var portNum int
-		switch v := port.(type) {
-		case int:
-			portNum = v
-		case float64:
-			portNum = int(v)
-		}
-		if portNum < 1 || portNum > 65535 {
-			errors = append(errors, plugin.ValidationError{
-				Path:    prefix + "Port",
-				Message: fmt.Sprintf("port must be between 1 and 65535, got: %d", portNum),
-			})
-		}
+func validateSSHPort(directives map[string]any, prefix string) []plugin.ValidationError {
+	portNum, ok := sshAnyToInt(directives["Port"])
+	if !ok {
+		return nil
+	}
+	if portNum >= 1 && portNum <= 65535 {
+		return nil
 	}
 
-	// Validate StrictHostKeyChecking
-	if strictHost, ok := directives["StrictHostKeyChecking"].(string); ok {
-		validValues := []string{"yes", "no", "ask", "accept-new", "off"}
-		if !containsString(validValues, strictHost) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    prefix + "StrictHostKeyChecking",
-				Message: fmt.Sprintf("invalid value: %s (valid: yes, no, ask, accept-new, off)", strictHost),
-			})
-		}
+	return []plugin.ValidationError{{
+		Path:    prefix + "Port",
+		Message: fmt.Sprintf("port must be between 1 and 65535, got: %d", portNum),
+	}}
+}
+
+func validateSSHStrictHostKeyChecking(directives map[string]any, prefix string) []plugin.ValidationError {
+	strictHost, ok := directives["StrictHostKeyChecking"].(string)
+	if !ok {
+		return nil
 	}
 
-	// Validate AddKeysToAgent
-	if addKeys, ok := directives["AddKeysToAgent"].(string); ok {
-		validValues := []string{"yes", "no", "ask", "confirm"}
-		// Also supports time specs like "1h"
-		if !containsString(validValues, addKeys) && !isTimeSpec(addKeys) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    prefix + "AddKeysToAgent",
-				Message: fmt.Sprintf("invalid value: %s (valid: yes, no, ask, confirm, or time spec)", addKeys),
-			})
-		}
+	validValues := []string{"yes", "no", "ask", "accept-new", "off"}
+	if containsString(validValues, strictHost) {
+		return nil
 	}
 
-	// Validate ControlMaster
-	if controlMaster, ok := directives["ControlMaster"].(string); ok {
-		validValues := []string{"yes", "no", "ask", "auto", "autoask"}
-		if !containsString(validValues, controlMaster) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    prefix + "ControlMaster",
-				Message: fmt.Sprintf("invalid value: %s (valid: yes, no, ask, auto, autoask)", controlMaster),
-			})
-		}
+	return []plugin.ValidationError{{
+		Path:    prefix + "StrictHostKeyChecking",
+		Message: fmt.Sprintf("invalid value: %s (valid: yes, no, ask, accept-new, off)", strictHost),
+	}}
+}
+
+func validateSSHAddKeysToAgent(directives map[string]any, prefix string) []plugin.ValidationError {
+	addKeys, ok := directives["AddKeysToAgent"].(string)
+	if !ok {
+		return nil
 	}
 
-	// Validate RequestTTY
-	if requestTTY, ok := directives["RequestTTY"].(string); ok {
-		validValues := []string{"yes", "no", "auto", "force"}
-		if !containsString(validValues, requestTTY) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    prefix + "RequestTTY",
-				Message: fmt.Sprintf("invalid value: %s (valid: yes, no, auto, force)", requestTTY),
-			})
-		}
+	validValues := []string{"yes", "no", "ask", "confirm"}
+	if containsString(validValues, addKeys) || isTimeSpec(addKeys) {
+		return nil
 	}
 
-	// Validate LogLevel
-	if logLevel, ok := directives["LogLevel"].(string); ok {
-		validLevels := []string{"QUIET", "FATAL", "ERROR", "INFO", "VERBOSE", "DEBUG", "DEBUG1", "DEBUG2", "DEBUG3"}
-		if !containsString(validLevels, logLevel) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    prefix + "LogLevel",
-				Message: fmt.Sprintf("invalid log level: %s", logLevel),
-			})
-		}
+	return []plugin.ValidationError{{
+		Path:    prefix + "AddKeysToAgent",
+		Message: fmt.Sprintf("invalid value: %s (valid: yes, no, ask, confirm, or time spec)", addKeys),
+	}}
+}
+
+func validateSSHControlMaster(directives map[string]any, prefix string) []plugin.ValidationError {
+	controlMaster, ok := directives["ControlMaster"].(string)
+	if !ok {
+		return nil
 	}
 
-	// Validate AddressFamily
-	if addressFamily, ok := directives["AddressFamily"].(string); ok {
-		validFamilies := []string{"any", "inet", "inet6"}
-		if !containsString(validFamilies, addressFamily) {
-			errors = append(errors, plugin.ValidationError{
-				Path:    prefix + "AddressFamily",
-				Message: fmt.Sprintf("invalid address family: %s (valid: any, inet, inet6)", addressFamily),
-			})
-		}
+	validValues := []string{"yes", "no", "ask", "auto", "autoask"}
+	if containsString(validValues, controlMaster) {
+		return nil
 	}
 
-	// Validate integer fields
+	return []plugin.ValidationError{{
+		Path:    prefix + "ControlMaster",
+		Message: fmt.Sprintf("invalid value: %s (valid: yes, no, ask, auto, autoask)", controlMaster),
+	}}
+}
+
+func validateSSHRequestTTY(directives map[string]any, prefix string) []plugin.ValidationError {
+	requestTTY, ok := directives["RequestTTY"].(string)
+	if !ok {
+		return nil
+	}
+
+	validValues := []string{"yes", "no", "auto", "force"}
+	if containsString(validValues, requestTTY) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    prefix + "RequestTTY",
+		Message: fmt.Sprintf("invalid value: %s (valid: yes, no, auto, force)", requestTTY),
+	}}
+}
+
+func validateSSHLogLevel(directives map[string]any, prefix string) []plugin.ValidationError {
+	logLevel, ok := directives["LogLevel"].(string)
+	if !ok {
+		return nil
+	}
+
+	validLevels := []string{"QUIET", "FATAL", "ERROR", "INFO", "VERBOSE", "DEBUG", "DEBUG1", "DEBUG2", "DEBUG3"}
+	if containsString(validLevels, logLevel) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    prefix + "LogLevel",
+		Message: fmt.Sprintf("invalid log level: %s", logLevel),
+	}}
+}
+
+func validateSSHAddressFamily(directives map[string]any, prefix string) []plugin.ValidationError {
+	addressFamily, ok := directives["AddressFamily"].(string)
+	if !ok {
+		return nil
+	}
+
+	validFamilies := []string{"any", "inet", "inet6"}
+	if containsString(validFamilies, addressFamily) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    prefix + "AddressFamily",
+		Message: fmt.Sprintf("invalid address family: %s (valid: any, inet, inet6)", addressFamily),
+	}}
+}
+
+func validateSSHIntegerFields(directives map[string]any, prefix string) []plugin.ValidationError {
 	intFields := map[string]struct{ min, max int }{
 		"ConnectTimeout":      {0, 3600},
 		"ConnectionAttempts":  {1, 100},
 		"ServerAliveInterval": {0, 86400},
 		"ServerAliveCountMax": {0, 100},
 	}
+
+	var errors []plugin.ValidationError
 	for field, limits := range intFields {
-		if val, ok := directives[field]; ok {
-			var intVal int
-			switch v := val.(type) {
-			case int:
-				intVal = v
-			case float64:
-				intVal = int(v)
-			}
-			if intVal < limits.min || intVal > limits.max {
-				errors = append(errors, plugin.ValidationError{
-					Path:    prefix + field,
-					Message: fmt.Sprintf("%s must be between %d and %d, got: %d", field, limits.min, limits.max, intVal),
-				})
-			}
+		intVal, ok := sshAnyToInt(directives[field])
+		if !ok {
+			continue
+		}
+
+		if intVal < limits.min || intVal > limits.max {
+			errors = append(errors, plugin.ValidationError{
+				Path:    prefix + field,
+				Message: fmt.Sprintf("%s must be between %d and %d, got: %d", field, limits.min, limits.max, intVal),
+			})
 		}
 	}
-
 	return errors
 }
 
@@ -372,140 +412,104 @@ func (p *Plugin) ToNative(config any) ([]byte, error) {
 	}
 
 	var sb strings.Builder
+	writeSSHConfigHeader(&sb)
+	writeSSHGlobalDirectives(&sb, configMap)
+	writeSSHHostBlocks(&sb, configMap)
+	writeSSHMatchBlocks(&sb, configMap)
+	return []byte(sb.String()), nil
+}
 
-	// Write header comment
+func writeSSHConfigHeader(sb *strings.Builder) {
 	sb.WriteString("# SSH config - Generated by terraform-provider-filemanager\n")
 	sb.WriteString("# Do not edit manually\n\n")
+}
 
-	// Write global directives first (non-Host, non-Match)
+func writeSSHGlobalDirectives(sb *strings.Builder, configMap map[string]any) {
 	for key, value := range configMap {
 		if key == "Host" || key == "Match" {
 			continue
 		}
 		sb.WriteString(fmt.Sprintf("%s %s\n", key, formatValue(value)))
 	}
+}
 
-	// Write Host blocks
-	if hosts, ok := configMap["Host"].([]any); ok {
-		for _, host := range hosts {
-			hostMap, ok := host.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			sb.WriteString("\n")
-			if pattern, ok := hostMap["pattern"].(string); ok {
-				sb.WriteString(fmt.Sprintf("Host %s\n", pattern))
-			}
-
-			for key, value := range hostMap {
-				if key == "pattern" {
-					continue
-				}
-				sb.WriteString(fmt.Sprintf("    %s %s\n", key, formatValue(value)))
-			}
-		}
+func writeSSHHostBlocks(sb *strings.Builder, configMap map[string]any) {
+	hosts, ok := configMap["Host"].([]any)
+	if !ok {
+		return
 	}
 
-	// Write Match blocks
-	if matches, ok := configMap["Match"].([]any); ok {
-		for _, match := range matches {
-			matchMap, ok := match.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			sb.WriteString("\n")
-			if condition, ok := matchMap["condition"].(string); ok {
-				sb.WriteString(fmt.Sprintf("Match %s\n", condition))
-			}
-
-			for key, value := range matchMap {
-				if key == "condition" {
-					continue
-				}
-				sb.WriteString(fmt.Sprintf("    %s %s\n", key, formatValue(value)))
-			}
+	for _, host := range hosts {
+		hostMap, ok := host.(map[string]any)
+		if !ok {
+			continue
 		}
+
+		sb.WriteString("\n")
+		if pattern, ok := hostMap["pattern"].(string); ok {
+			sb.WriteString(fmt.Sprintf("Host %s\n", pattern))
+		}
+		writeIndentedSSHDirectives(sb, hostMap, "pattern")
+	}
+}
+
+func writeSSHMatchBlocks(sb *strings.Builder, configMap map[string]any) {
+	matches, ok := configMap["Match"].([]any)
+	if !ok {
+		return
 	}
 
-	return []byte(sb.String()), nil
+	for _, match := range matches {
+		matchMap, ok := match.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		sb.WriteString("\n")
+		if condition, ok := matchMap["condition"].(string); ok {
+			sb.WriteString(fmt.Sprintf("Match %s\n", condition))
+		}
+		writeIndentedSSHDirectives(sb, matchMap, "condition")
+	}
+}
+
+func writeIndentedSSHDirectives(sb *strings.Builder, directives map[string]any, skipKey string) {
+	for key, value := range directives {
+		if key == skipKey {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("    %s %s\n", key, formatValue(value)))
+	}
 }
 
 // FromNative parses native ssh_config format.
 func (p *Plugin) FromNative(data []byte) (any, error) {
 	config := make(map[string]any)
-	var currentHost map[string]any
-	var currentMatch map[string]any
 	var hosts []any
 	var matches []any
+	var currentHost map[string]any
+	var currentMatch map[string]any
 	inBlock := ""
 
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
+		if shouldSkipSSHConfigLine(line) {
 			continue
 		}
 
-		// Split into key and value
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) < 2 {
-			parts = strings.SplitN(line, "\t", 2)
-			if len(parts) < 2 {
-				continue
-			}
-		}
-
-		key := parts[0]
-		value := strings.TrimSpace(parts[1])
-
-		// Handle Host blocks
-		if strings.EqualFold(key, "Host") {
-			// Save previous block
-			if currentHost != nil {
-				hosts = append(hosts, currentHost)
-			}
-			if currentMatch != nil {
-				matches = append(matches, currentMatch)
-				currentMatch = nil
-			}
-
-			currentHost = map[string]any{
-				"pattern": value,
-			}
-			inBlock = "Host"
+		key, value, ok := parseSSHConfigDirective(line)
+		if !ok {
 			continue
 		}
 
-		// Handle Match blocks
-		if strings.EqualFold(key, "Match") {
-			// Save previous block
-			if currentHost != nil {
-				hosts = append(hosts, currentHost)
-				currentHost = nil
-			}
-			if currentMatch != nil {
-				matches = append(matches, currentMatch)
-			}
-
-			currentMatch = map[string]any{
-				"condition": value,
-			}
-			inBlock = "Match"
-			continue
-		}
-
-		// Add to appropriate block
-		if inBlock == "Host" && currentHost != nil {
-			currentHost[key] = parseValue(value)
-		} else if inBlock == "Match" && currentMatch != nil {
-			currentMatch[key] = parseValue(value)
-		} else {
-			// Global directive
-			config[key] = parseValue(value)
+		switch {
+		case strings.EqualFold(key, "Host"):
+			currentHost, currentMatch, hosts, matches, inBlock = startSSHHostBlock(value, currentHost, currentMatch, hosts, matches)
+		case strings.EqualFold(key, "Match"):
+			currentHost, currentMatch, hosts, matches, inBlock = startSSHMatchBlock(value, currentHost, currentMatch, hosts, matches)
+		default:
+			assignSSHDirective(config, currentHost, currentMatch, inBlock, key, value)
 		}
 	}
 
@@ -513,7 +517,39 @@ func (p *Plugin) FromNative(data []byte) (any, error) {
 		return nil, fmt.Errorf("error reading SSH config: %w", err)
 	}
 
-	// Save last block
+	hosts, matches = finalizeSSHBlocks(currentHost, currentMatch, hosts, matches)
+	if len(hosts) > 0 {
+		config["Host"] = hosts
+	}
+	if len(matches) > 0 {
+		config["Match"] = matches
+	}
+	return config, nil
+}
+
+func shouldSkipSSHConfigLine(line string) bool {
+	return line == "" || strings.HasPrefix(line, "#")
+}
+
+func parseSSHConfigDirective(line string) (string, string, bool) {
+	parts := strings.SplitN(line, " ", 2)
+	if len(parts) < 2 {
+		parts = strings.SplitN(line, "\t", 2)
+		if len(parts) < 2 {
+			return "", "", false
+		}
+	}
+
+	return parts[0], strings.TrimSpace(parts[1]), true
+}
+
+func startSSHHostBlock(
+	value string,
+	currentHost map[string]any,
+	currentMatch map[string]any,
+	hosts []any,
+	matches []any,
+) (map[string]any, map[string]any, []any, []any, string) {
 	if currentHost != nil {
 		hosts = append(hosts, currentHost)
 	}
@@ -521,14 +557,52 @@ func (p *Plugin) FromNative(data []byte) (any, error) {
 		matches = append(matches, currentMatch)
 	}
 
-	if len(hosts) > 0 {
-		config["Host"] = hosts
+	return map[string]any{"pattern": value}, nil, hosts, matches, "Host"
+}
+
+func startSSHMatchBlock(
+	value string,
+	currentHost map[string]any,
+	currentMatch map[string]any,
+	hosts []any,
+	matches []any,
+) (map[string]any, map[string]any, []any, []any, string) {
+	if currentHost != nil {
+		hosts = append(hosts, currentHost)
 	}
-	if len(matches) > 0 {
-		config["Match"] = matches
+	if currentMatch != nil {
+		matches = append(matches, currentMatch)
 	}
 
-	return config, nil
+	return nil, map[string]any{"condition": value}, hosts, matches, "Match"
+}
+
+func assignSSHDirective(
+	config map[string]any,
+	currentHost map[string]any,
+	currentMatch map[string]any,
+	inBlock, key, value string,
+) {
+	parsed := parseValue(value)
+	if inBlock == "Host" && currentHost != nil {
+		currentHost[key] = parsed
+		return
+	}
+	if inBlock == "Match" && currentMatch != nil {
+		currentMatch[key] = parsed
+		return
+	}
+	config[key] = parsed
+}
+
+func finalizeSSHBlocks(currentHost map[string]any, currentMatch map[string]any, hosts []any, matches []any) ([]any, []any) {
+	if currentHost != nil {
+		hosts = append(hosts, currentHost)
+	}
+	if currentMatch != nil {
+		matches = append(matches, currentMatch)
+	}
+	return hosts, matches
 }
 
 // Merge merges two configurations.
@@ -562,61 +636,60 @@ func (p *Plugin) ParseSSHConfigFile(data []byte, hostAlias string) (*SSHConfigHo
 	}
 
 	result := &SSHConfigHost{}
-
-	// Check Host blocks
-	if hosts, ok := configMap["Host"].([]any); ok {
-		for _, host := range hosts {
-			hostMap, ok := host.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			pattern, ok := hostMap["pattern"].(string)
-			if !ok {
-				continue
-			}
-
-			// Check if pattern matches
-			patterns := strings.Fields(pattern)
-			matched := false
-			for _, p := range patterns {
-				if matchHost(hostAlias, p) {
-					matched = true
-					break
-				}
-			}
-
-			if !matched {
-				continue
-			}
-
-			// Apply matching config
-			if hostname, ok := hostMap["HostName"].(string); ok && result.Hostname == "" {
-				result.Hostname = hostname
-			}
-			if port, ok := hostMap["Port"]; ok && result.Port == 0 {
-				switch v := port.(type) {
-				case int:
-					result.Port = v
-				case float64:
-					result.Port = int(v)
-				}
-			}
-			if user, ok := hostMap["User"].(string); ok && result.User == "" {
-				result.User = user
-			}
-			if identity, ok := hostMap["IdentityFile"].(string); ok && result.IdentityFile == "" {
-				result.IdentityFile = identity
-			}
-		}
-	}
-
-	// Use alias as hostname if not specified
+	applyMatchingHostBlocks(configMap["Host"], hostAlias, result)
 	if result.Hostname == "" {
 		result.Hostname = hostAlias
 	}
-
 	return result, nil
+}
+
+func applyMatchingHostBlocks(hostsAny any, hostAlias string, result *SSHConfigHost) {
+	hosts, ok := hostsAny.([]any)
+	if !ok {
+		return
+	}
+
+	for _, host := range hosts {
+		hostMap, ok := host.(map[string]any)
+		if !ok {
+			continue
+		}
+		if !sshHostBlockMatches(hostMap, hostAlias) {
+			continue
+		}
+		applySSHHostValues(result, hostMap)
+	}
+}
+
+func sshHostBlockMatches(hostMap map[string]any, hostAlias string) bool {
+	pattern, ok := hostMap["pattern"].(string)
+	if !ok {
+		return false
+	}
+
+	for _, candidate := range strings.Fields(pattern) {
+		if matchHost(hostAlias, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func applySSHHostValues(result *SSHConfigHost, hostMap map[string]any) {
+	if hostname, ok := hostMap["HostName"].(string); ok && result.Hostname == "" {
+		result.Hostname = hostname
+	}
+	if result.Port == 0 {
+		if port, ok := sshAnyToInt(hostMap["Port"]); ok {
+			result.Port = port
+		}
+	}
+	if user, ok := hostMap["User"].(string); ok && result.User == "" {
+		result.User = user
+	}
+	if identity, ok := hostMap["IdentityFile"].(string); ok && result.IdentityFile == "" {
+		result.IdentityFile = identity
+	}
 }
 
 // Helper functions
@@ -654,6 +727,19 @@ func parseValue(value string) any {
 	}
 
 	return value
+}
+
+func sshAnyToInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 func containsString(slice []string, s string) bool {

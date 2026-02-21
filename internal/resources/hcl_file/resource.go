@@ -5,7 +5,6 @@ package hcl_file
 
 import (
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -161,7 +160,7 @@ Blocks are represented as nested objects. Block labels can be specified using a 
 				Computed:    true,
 			},
 			"md5": schema.StringAttribute{
-				Description: "MD5 checksum of the file content.",
+				Description: "Deprecated insecure checksum field. Always null.",
 				Computed:    true,
 			},
 			"sha256": schema.StringAttribute{
@@ -419,8 +418,7 @@ func (r *HCLFileResource) updateComputedValues(data *HCLFileResourceModel, conte
 	data.Size = types.Int64Value(int64(len(content)))
 	data.Rendered = types.StringValue(string(content))
 
-	md5sum := md5.Sum(content)
-	data.MD5 = types.StringValue(hex.EncodeToString(md5sum[:]))
+	data.MD5 = types.StringNull()
 
 	sha256sum := sha256.Sum256(content)
 	data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))

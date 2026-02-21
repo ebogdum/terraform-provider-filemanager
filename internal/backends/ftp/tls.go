@@ -12,9 +12,12 @@ import (
 
 // buildTLSConfig builds a TLS configuration from the backend config.
 func buildTLSConfig(config plugin.BackendConfig) (*tls.Config, error) {
+	if config.TLSSkipVerify {
+		return nil, fmt.Errorf("tls_skip_verify=true is insecure and not supported")
+	}
+
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: config.TLSSkipVerify,
-		MinVersion:         tls.VersionTLS12,
+		MinVersion: tls.VersionTLS12,
 	}
 
 	// Load CA certificate if provided

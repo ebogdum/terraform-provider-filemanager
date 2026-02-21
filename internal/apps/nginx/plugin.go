@@ -435,81 +435,84 @@ func (p *Plugin) writeDirective(w io.Writer, name string, value any, indent stri
 
 // writeBlock writes a configuration block.
 func (p *Plugin) writeBlock(w io.Writer, name string, value any, indent int) error {
-	indentStr := strings.Repeat("    ", indent)
-
 	switch v := value.(type) {
 	case []any:
-		// Multiple blocks with the same name
-		for i, item := range v {
-			itemMap, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			// Handle location blocks specially (they have a path)
-			if name == "location" {
-				path := itemMap["path"]
-				delete(itemMap, "path")
-				modifier := itemMap["modifier"]
-				delete(itemMap, "modifier")
-
-				if modifier != nil {
-					fmt.Fprintf(w, "%s%s %v %v {\n", indentStr, name, modifier, path)
-				} else {
-					fmt.Fprintf(w, "%s%s %v {\n", indentStr, name, path)
-				}
-			} else if name == "server" || name == "upstream" {
-				// Named blocks
-				blockName := itemMap["name"]
-				delete(itemMap, "name")
-				if blockName != nil {
-					fmt.Fprintf(w, "%s%s %v {\n", indentStr, name, blockName)
-				} else {
-					fmt.Fprintf(w, "%s%s {\n", indentStr, name)
-				}
-			} else {
-				fmt.Fprintf(w, "%s%s {\n", indentStr, name)
-			}
-
-			if err := p.writeConfig(w, itemMap, indent+1); err != nil {
-				return err
-			}
-			fmt.Fprintf(w, "%s}\n", indentStr)
-
-			if i < len(v)-1 {
-				fmt.Fprintln(w)
-			}
-		}
-
+		return p.writeBlockList(w, name, v, indent)
 	case map[string]any:
-		// Single block
-		blockName := v["name"]
-		delete(v, "name")
+		return p.writeSingleBlock(w, name, v, indent)
+	default:
+		return nil
+	}
+}
 
-		if name == "location" {
-			path := v["path"]
-			delete(v, "path")
-			modifier := v["modifier"]
-			delete(v, "modifier")
-
-			if modifier != nil {
-				fmt.Fprintf(w, "%s%s %v %v {\n", indentStr, name, modifier, path)
-			} else {
-				fmt.Fprintf(w, "%s%s %v {\n", indentStr, name, path)
-			}
-		} else if blockName != nil {
-			fmt.Fprintf(w, "%s%s %v {\n", indentStr, name, blockName)
-		} else {
-			fmt.Fprintf(w, "%s%s {\n", indentStr, name)
+func (p *Plugin) writeBlockList(w io.Writer, name string, items []any, indent int) error {
+	for i, item := range items {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
 		}
 
-		if err := p.writeConfig(w, v, indent+1); err != nil {
+		if err := p.writeBlockItem(w, name, itemMap, indent, false); err != nil {
 			return err
 		}
-		fmt.Fprintf(w, "%s}\n", indentStr)
+
+		if i < len(items)-1 {
+			fmt.Fprintln(w)
+		}
+	}
+	return nil
+}
+
+func (p *Plugin) writeSingleBlock(w io.Writer, name string, block map[string]any, indent int) error {
+	return p.writeBlockItem(w, name, block, indent, true)
+}
+
+func (p *Plugin) writeBlockItem(w io.Writer, name string, block map[string]any, indent int, single bool) error {
+	indentStr := strings.Repeat("    ", indent)
+	header := nginxBlockHeader(name, block, single)
+	fmt.Fprintf(w, "%s%s\n", indentStr, header)
+
+	if err := p.writeConfig(w, block, indent+1); err != nil {
+		return err
 	}
 
+	fmt.Fprintf(w, "%s}\n", indentStr)
 	return nil
+}
+
+func nginxBlockHeader(name string, block map[string]any, single bool) string {
+	if single {
+		delete(block, "name")
+	}
+
+	if name == "location" {
+		return nginxLocationHeader(name, block)
+	}
+	if name == "server" || name == "upstream" {
+		return nginxNamedBlockHeader(name, block)
+	}
+	return fmt.Sprintf("%s {", name)
+}
+
+func nginxLocationHeader(name string, block map[string]any) string {
+	path := block["path"]
+	delete(block, "path")
+	modifier := block["modifier"]
+	delete(block, "modifier")
+
+	if modifier != nil {
+		return fmt.Sprintf("%s %v %v {", name, modifier, path)
+	}
+	return fmt.Sprintf("%s %v {", name, path)
+}
+
+func nginxNamedBlockHeader(name string, block map[string]any) string {
+	blockName := block["name"]
+	delete(block, "name")
+	if blockName != nil {
+		return fmt.Sprintf("%s %v {", name, blockName)
+	}
+	return fmt.Sprintf("%s {", name)
 }
 
 // FromNative parses Nginx native format into configuration.

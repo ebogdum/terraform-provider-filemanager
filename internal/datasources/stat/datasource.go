@@ -221,25 +221,7 @@ func (d *StatDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	data.Exists = types.BoolValue(exists)
 
 	if !exists {
-		// Set null values for non-existent path
-		data.Size = types.Int64Null()
-		data.IsDir = types.BoolNull()
-		data.IsFile = types.BoolNull()
-		data.IsSymlink = types.BoolNull()
-		data.LinkTarget = types.StringNull()
-		data.Mode = types.StringNull()
-		data.ModTime = types.StringNull()
-		data.AccessTime = types.StringNull()
-		data.CreationTime = types.StringNull()
-		data.UID = types.Int64Null()
-		data.GID = types.Int64Null()
-		data.ContentType = types.StringNull()
-		data.IsModifiedWithin = types.BoolNull()
-		data.IsAccessedWithin = types.BoolNull()
-		data.Age = types.StringNull()
-		data.OwnerName = types.StringNull()
-		data.GroupName = types.StringNull()
-
+		setMissingStatFields(&data)
 		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 		return
 	}
@@ -251,106 +233,133 @@ func (d *StatDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
+	now := time.Now()
+	age := populateStatFieldsFromInfo(&data, info, now)
+	if err := populateModifiedWithin(&data, age); err != nil {
+		resp.Diagnostics.AddError("Invalid modified_within duration", err.Error())
+		return
+	}
+	if err := populateAccessedWithin(&data, info, now); err != nil {
+		resp.Diagnostics.AddError("Invalid accessed_within duration", err.Error())
+		return
+	}
+	populateOwnerGroupNames(&data, info)
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+func setMissingStatFields(data *StatDataSourceModel) {
+	data.Size = types.Int64Null()
+	data.IsDir = types.BoolNull()
+	data.IsFile = types.BoolNull()
+	data.IsSymlink = types.BoolNull()
+	data.LinkTarget = types.StringNull()
+	data.Mode = types.StringNull()
+	data.ModTime = types.StringNull()
+	data.AccessTime = types.StringNull()
+	data.CreationTime = types.StringNull()
+	data.UID = types.Int64Null()
+	data.GID = types.Int64Null()
+	data.ContentType = types.StringNull()
+	data.IsModifiedWithin = types.BoolNull()
+	data.IsAccessedWithin = types.BoolNull()
+	data.Age = types.StringNull()
+	data.OwnerName = types.StringNull()
+	data.GroupName = types.StringNull()
+}
+
+func populateStatFieldsFromInfo(data *StatDataSourceModel, info *plugin.FileInfo, now time.Time) time.Duration {
 	data.Size = types.Int64Value(info.Size)
 	data.IsDir = types.BoolValue(info.IsDir)
 	data.IsFile = types.BoolValue(!info.IsDir && !info.IsSymlink)
 	data.IsSymlink = types.BoolValue(info.IsSymlink)
 	data.Mode = types.StringValue(fmt.Sprintf("%04o", info.Mode.Perm()))
 	data.ModTime = types.StringValue(info.ModTime.Format("2006-01-02T15:04:05Z07:00"))
-
-	if info.IsSymlink && info.LinkTarget != "" {
-		data.LinkTarget = types.StringValue(info.LinkTarget)
-	} else {
-		data.LinkTarget = types.StringNull()
-	}
-
-	if !info.LastAccessTime.IsZero() {
-		data.AccessTime = types.StringValue(info.LastAccessTime.Format("2006-01-02T15:04:05Z07:00"))
-	} else {
-		data.AccessTime = types.StringNull()
-	}
-
-	if !info.CreationTime.IsZero() {
-		data.CreationTime = types.StringValue(info.CreationTime.Format("2006-01-02T15:04:05Z07:00"))
-	} else {
-		data.CreationTime = types.StringNull()
-	}
-
+	data.LinkTarget = optionalSymlinkTarget(info)
+	data.AccessTime = optionalTimeString(info.LastAccessTime)
+	data.CreationTime = optionalTimeString(info.CreationTime)
 	data.UID = types.Int64Value(int64(info.UID))
 	data.GID = types.Int64Value(int64(info.GID))
+	data.ContentType = optionalString(info.ContentType)
 
-	if info.ContentType != "" {
-		data.ContentType = types.StringValue(info.ContentType)
-	} else {
-		data.ContentType = types.StringNull()
-	}
-
-	// Calculate age (time since last modification)
-	now := time.Now()
 	age := now.Sub(info.ModTime)
 	data.Age = types.StringValue(age.Truncate(time.Second).String())
+	return age
+}
 
-	// Check modified_within
-	if !data.ModifiedWithin.IsNull() && data.ModifiedWithin.ValueString() != "" {
-		duration, err := parseDuration(data.ModifiedWithin.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Invalid modified_within duration", err.Error())
-			return
-		}
-		isWithin := age <= duration
-		data.IsModifiedWithin = types.BoolValue(isWithin)
-	} else {
+func optionalSymlinkTarget(info *plugin.FileInfo) types.String {
+	if info.IsSymlink && info.LinkTarget != "" {
+		return types.StringValue(info.LinkTarget)
+	}
+	return types.StringNull()
+}
+
+func optionalTimeString(t time.Time) types.String {
+	if t.IsZero() {
+		return types.StringNull()
+	}
+	return types.StringValue(t.Format("2006-01-02T15:04:05Z07:00"))
+}
+
+func optionalString(s string) types.String {
+	if s == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(s)
+}
+
+func populateModifiedWithin(data *StatDataSourceModel, age time.Duration) error {
+	if data.ModifiedWithin.IsNull() || data.ModifiedWithin.ValueString() == "" {
 		data.IsModifiedWithin = types.BoolNull()
+		return nil
 	}
+	duration, err := parseDuration(data.ModifiedWithin.ValueString())
+	if err != nil {
+		return err
+	}
+	data.IsModifiedWithin = types.BoolValue(age <= duration)
+	return nil
+}
 
-	// Check accessed_within
-	if !data.AccessedWithin.IsNull() && data.AccessedWithin.ValueString() != "" {
-		duration, err := parseDuration(data.AccessedWithin.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Invalid accessed_within duration", err.Error())
-			return
-		}
-		if !info.LastAccessTime.IsZero() {
-			accessAge := now.Sub(info.LastAccessTime)
-			isWithin := accessAge <= duration
-			data.IsAccessedWithin = types.BoolValue(isWithin)
-		} else {
-			// Access time not available on this platform
-			data.IsAccessedWithin = types.BoolNull()
-		}
-	} else {
+func populateAccessedWithin(data *StatDataSourceModel, info *plugin.FileInfo, now time.Time) error {
+	if data.AccessedWithin.IsNull() || data.AccessedWithin.ValueString() == "" {
 		data.IsAccessedWithin = types.BoolNull()
+		return nil
 	}
+	duration, err := parseDuration(data.AccessedWithin.ValueString())
+	if err != nil {
+		return err
+	}
+	if info.LastAccessTime.IsZero() {
+		data.IsAccessedWithin = types.BoolNull()
+		return nil
+	}
+	accessAge := now.Sub(info.LastAccessTime)
+	data.IsAccessedWithin = types.BoolValue(accessAge <= duration)
+	return nil
+}
 
-	// Resolve owner name from UID
-	// Only attempt lookup for local backend - remote UIDs may not exist locally
+func populateOwnerGroupNames(data *StatDataSourceModel, info *plugin.FileInfo) {
 	isLocal := data.Service.IsNull() || data.Service.ValueString() == "" || data.Service.ValueString() == "local"
-	if isLocal {
-		if u, err := user.LookupId(fmt.Sprintf("%d", info.UID)); err == nil {
-			data.OwnerName = types.StringValue(u.Username)
-		} else {
-			// Return UID as string when lookup fails
-			data.OwnerName = types.StringValue(fmt.Sprintf("%d", info.UID))
-		}
-	} else {
-		// For remote backends, return UID as string (cannot resolve remotely)
-		data.OwnerName = types.StringValue(fmt.Sprintf("%d", info.UID))
-	}
+	data.OwnerName = resolveIdentityName(isLocal, info.UID, true)
+	data.GroupName = resolveIdentityName(isLocal, info.GID, false)
+}
 
-	// Resolve group name from GID
-	if isLocal {
-		if g, err := user.LookupGroupId(fmt.Sprintf("%d", info.GID)); err == nil {
-			data.GroupName = types.StringValue(g.Name)
-		} else {
-			// Return GID as string when lookup fails
-			data.GroupName = types.StringValue(fmt.Sprintf("%d", info.GID))
-		}
-	} else {
-		// For remote backends, return GID as string (cannot resolve remotely)
-		data.GroupName = types.StringValue(fmt.Sprintf("%d", info.GID))
+func resolveIdentityName(isLocal bool, id int, isUser bool) types.String {
+	idStr := fmt.Sprintf("%d", id)
+	if !isLocal {
+		return types.StringValue(idStr)
 	}
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	if isUser {
+		if u, err := user.LookupId(idStr); err == nil {
+			return types.StringValue(u.Username)
+		}
+		return types.StringValue(idStr)
+	}
+	if g, err := user.LookupGroupId(idStr); err == nil {
+		return types.StringValue(g.Name)
+	}
+	return types.StringValue(idStr)
 }
 
 // parseDuration parses a duration string with support for days (d).

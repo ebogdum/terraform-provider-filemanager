@@ -461,42 +461,12 @@ func jsonDelete(data any, path string) (any, error) {
 		return nil, nil
 	}
 
-	// Navigate to parent, tracking parents for array updates
-	type parentInfo struct {
-		container any
-		key       string
+	current, parents, err := navigateToDeleteParent(result, parts)
+	if err != nil {
+		return nil, err
 	}
-	var parents []parentInfo
-
-	current := result
-	for i, part := range parts[:len(parts)-1] {
-		if part == "" {
-			continue
-		}
-
-		switch v := current.(type) {
-		case map[string]any:
-			next, ok := v[part]
-			if !ok {
-				return result, nil // Path doesn't exist, nothing to delete
-			}
-			parents = append(parents, parentInfo{container: v, key: part})
-			current = next
-
-		case []any:
-			var idx int
-			if _, err := fmt.Sscanf(part, "%d", &idx); err != nil {
-				return nil, fmt.Errorf("invalid array index at %d: %s", i, part)
-			}
-			if idx < 0 || idx >= len(v) {
-				return result, nil // Index doesn't exist
-			}
-			parents = append(parents, parentInfo{container: v, key: part})
-			current = v[idx]
-
-		default:
-			return result, nil
-		}
+	if current == nil {
+		return result, nil
 	}
 
 	// Delete the final key
@@ -506,32 +476,97 @@ func jsonDelete(data any, path string) (any, error) {
 		delete(v, lastPart)
 
 	case []any:
-		var idx int
-		if _, err := fmt.Sscanf(lastPart, "%d", &idx); err != nil {
+		idx, err := parseArrayIndex(lastPart)
+		if err != nil {
 			return nil, fmt.Errorf("invalid array index: %s", lastPart)
 		}
 		if idx >= 0 && idx < len(v) {
 			// Remove element at index
 			newSlice := append(v[:idx], v[idx+1:]...)
 			// Update parent reference to the new slice
-			if len(parents) > 0 {
-				parent := parents[len(parents)-1]
-				switch p := parent.container.(type) {
-				case map[string]any:
-					p[parent.key] = newSlice
-				case []any:
-					var pIdx int
-					fmt.Sscanf(parent.key, "%d", &pIdx)
-					p[pIdx] = newSlice
-				}
-			} else {
+			if len(parents) == 0 {
 				// The array is at root level
 				return newSlice, nil
+			}
+			if err := assignArrayToParent(parents[len(parents)-1], newSlice); err != nil {
+				return nil, err
 			}
 		}
 	}
 
 	return result, nil
+}
+
+type jsonParentInfo struct {
+	container any
+	key       string
+}
+
+func navigateToDeleteParent(root any, parts []string) (any, []jsonParentInfo, error) {
+	var parents []jsonParentInfo
+	current := root
+
+	for i, part := range parts[:len(parts)-1] {
+		if part == "" {
+			continue
+		}
+
+		next, ok, err := nextJSONDeleteNode(current, part, i)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !ok {
+			return nil, parents, nil
+		}
+
+		parents = append(parents, jsonParentInfo{container: current, key: part})
+		current = next
+	}
+	return current, parents, nil
+}
+
+func nextJSONDeleteNode(current any, part string, idx int) (any, bool, error) {
+	switch v := current.(type) {
+	case map[string]any:
+		next, ok := v[part]
+		return next, ok, nil
+	case []any:
+		arrIdx, err := parseArrayIndex(part)
+		if err != nil {
+			return nil, false, fmt.Errorf("invalid array index at %d: %s", idx, part)
+		}
+		if arrIdx < 0 || arrIdx >= len(v) {
+			return nil, false, nil
+		}
+		return v[arrIdx], true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
+func parseArrayIndex(raw string) (int, error) {
+	var idx int
+	if _, err := fmt.Sscanf(raw, "%d", &idx); err != nil {
+		return 0, err
+	}
+	return idx, nil
+}
+
+func assignArrayToParent(parent jsonParentInfo, newSlice []any) error {
+	switch p := parent.container.(type) {
+	case map[string]any:
+		p[parent.key] = newSlice
+		return nil
+	case []any:
+		pIdx, err := parseArrayIndex(parent.key)
+		if err != nil {
+			return fmt.Errorf("invalid parent array index: %s", parent.key)
+		}
+		p[pIdx] = newSlice
+		return nil
+	default:
+		return nil
+	}
 }
 
 // splitPath splits a path like "foo.bar[0].baz" into parts.

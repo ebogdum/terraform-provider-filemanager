@@ -388,47 +388,64 @@ func (p *Plugin) ValidateSemantic(config any) ([]plugin.ValidationError, error) 
 		return errors, nil
 	}
 
-	// Warn about TLS disabled
-	if listener, ok := configMap["listener"]; ok {
-		if listeners, ok := listener.([]any); ok {
-			for i, l := range listeners {
-				if lMap, ok := l.(map[string]any); ok {
-					if tcp, ok := lMap["tcp"].(map[string]any); ok {
-						if tlsDisable, ok := tcp["tls_disable"].(bool); ok && tlsDisable {
-							errors = append(errors, plugin.ValidationError{
-								Path:    fmt.Sprintf("listener[%d].tcp.tls_disable", i),
-								Message: "TLS is disabled - this is not recommended for production",
-							})
-						}
-					}
-				}
-			}
-		}
+	errors = append(errors, validateVaultTLS(configMap)...)
+	errors = append(errors, validateVaultMlock(configMap)...)
+	errors = append(errors, validateVaultHA(configMap)...)
+	return errors, nil
+}
+
+func validateVaultTLS(configMap map[string]any) []plugin.ValidationError {
+	listeners, ok := configMap["listener"].([]any)
+	if !ok {
+		return nil
 	}
 
-	// Warn about disable_mlock
-	if disableMlock, ok := configMap["disable_mlock"]; ok {
-		if disabled, ok := disableMlock.(bool); ok && disabled {
+	var errors []plugin.ValidationError
+	for i, listener := range listeners {
+		lMap, ok := listener.(map[string]any)
+		if !ok {
+			continue
+		}
+		tcp, ok := lMap["tcp"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if tlsDisable, ok := tcp["tls_disable"].(bool); ok && tlsDisable {
 			errors = append(errors, plugin.ValidationError{
-				Path:    "disable_mlock",
-				Message: "mlock is disabled - sensitive data may be swapped to disk",
+				Path:    fmt.Sprintf("listener[%d].tcp.tls_disable", i),
+				Message: "TLS is disabled - this is not recommended for production",
 			})
 		}
 	}
+	return errors
+}
 
-	// Warn about HA without cluster_addr
-	if storage, ok := configMap["storage"].(map[string]any); ok {
-		if _, hasRaft := storage["raft"]; hasRaft {
-			if _, hasClusterAddr := configMap["cluster_addr"]; !hasClusterAddr {
-				errors = append(errors, plugin.ValidationError{
-					Path:    "cluster_addr",
-					Message: "cluster_addr should be set for raft storage in HA mode",
-				})
-			}
-		}
+func validateVaultMlock(configMap map[string]any) []plugin.ValidationError {
+	disableMlock, ok := configMap["disable_mlock"].(bool)
+	if !ok || !disableMlock {
+		return nil
 	}
+	return []plugin.ValidationError{{
+		Path:    "disable_mlock",
+		Message: "mlock is disabled - sensitive data may be swapped to disk",
+	}}
+}
 
-	return errors, nil
+func validateVaultHA(configMap map[string]any) []plugin.ValidationError {
+	storage, ok := configMap["storage"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, hasRaft := storage["raft"]; !hasRaft {
+		return nil
+	}
+	if _, hasClusterAddr := configMap["cluster_addr"]; hasClusterAddr {
+		return nil
+	}
+	return []plugin.ValidationError{{
+		Path:    "cluster_addr",
+		Message: "cluster_addr should be set for raft storage in HA mode",
+	}}
 }
 
 // Normalize normalizes the configuration to a canonical form.

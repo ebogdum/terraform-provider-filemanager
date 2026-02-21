@@ -8,7 +8,6 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -147,7 +146,7 @@ func (r *ArchiveResource) Schema(ctx context.Context, req resource.SchemaRequest
 				Computed:    true,
 			},
 			"md5": schema.StringAttribute{
-				Description: "MD5 checksum of the archive.",
+				Description: "Deprecated insecure checksum field. Always null.",
 				Computed:    true,
 			},
 			"sha256": schema.StringAttribute{
@@ -266,8 +265,7 @@ func (r *ArchiveResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	md5sum := md5.Sum(content)
-	data.MD5 = types.StringValue(hex.EncodeToString(md5sum[:]))
+	data.MD5 = types.StringNull()
 
 	sha256sum := sha256.Sum256(content)
 	data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))
@@ -333,74 +331,73 @@ func (r *ArchiveResource) ImportState(ctx context.Context, req resource.ImportSt
 }
 
 // collectFiles collects files to include in the archive.
-func (r *ArchiveResource) collectFiles(ctx context.Context, data *ArchiveResourceModel) ([]string, error) {
-	var files []string
+func (r *ArchiveResource) collectFiles(_ context.Context, data *ArchiveResourceModel) ([]string, error) {
+	excludes := extractStringList(data.Excludes)
+	files := make([]string, 0)
 
-	// Get excludes
-	var excludes []string
-	if !data.Excludes.IsNull() && !data.Excludes.IsUnknown() {
-		elements := data.Excludes.Elements()
-		for _, e := range elements {
-			if strVal, ok := e.(types.String); ok {
-				excludes = append(excludes, strVal.ValueString())
-			}
-		}
+	dirFiles, err := collectSourceDirFiles(data, excludes)
+	if err != nil {
+		return nil, err
 	}
-
-	// If source_dir is specified, walk the directory
-	if !data.SourceDir.IsNull() && !data.SourceDir.IsUnknown() && data.SourceDir.ValueString() != "" {
-		sourceDir := data.SourceDir.ValueString()
-		err := filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-
-			// Skip directories
-			if info.IsDir() {
-				return nil
-			}
-
-			// Get relative path for matching
-			relPath, err := filepath.Rel(sourceDir, path)
-			if err != nil {
-				return err
-			}
-
-			// Check excludes
-			for _, pattern := range excludes {
-				matched, err := filepath.Match(pattern, relPath)
-				if err != nil {
-					continue
-				}
-				if matched {
-					return nil
-				}
-				// Also try matching against the filename
-				matched, _ = filepath.Match(pattern, info.Name())
-				if matched {
-					return nil
-				}
-			}
-
-			files = append(files, path)
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// If source_files is specified, add those
-	if !data.SourceFiles.IsNull() && !data.SourceFiles.IsUnknown() {
-		elements := data.SourceFiles.Elements()
-		for _, e := range elements {
-			if strVal, ok := e.(types.String); ok {
-				files = append(files, strVal.ValueString())
-			}
-		}
-	}
-
+	files = append(files, dirFiles...)
+	files = append(files, extractStringList(data.SourceFiles)...)
 	return files, nil
+}
+
+func collectSourceDirFiles(data *ArchiveResourceModel, excludes []string) ([]string, error) {
+	if data.SourceDir.IsNull() || data.SourceDir.IsUnknown() || data.SourceDir.ValueString() == "" {
+		return nil, nil
+	}
+
+	sourceDir := data.SourceDir.ValueString()
+	files := make([]string, 0)
+	err := filepath.Walk(sourceDir, func(filePath string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(sourceDir, filePath)
+		if err != nil {
+			return err
+		}
+		if matchesAnyPattern(excludes, relPath) || matchesAnyPattern(excludes, info.Name()) {
+			return nil
+		}
+
+		files = append(files, filePath)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func extractStringList(list types.List) []string {
+	if list.IsNull() || list.IsUnknown() {
+		return nil
+	}
+	elements := list.Elements()
+	values := make([]string, 0, len(elements))
+	for _, element := range elements {
+		if stringVal, ok := element.(types.String); ok {
+			values = append(values, stringVal.ValueString())
+		}
+	}
+	return values
+}
+
+func matchesAnyPattern(patterns []string, value string) bool {
+	for _, pattern := range patterns {
+		matched, err := filepath.Match(pattern, value)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 // createArchive creates the archive file.
@@ -545,8 +542,7 @@ func (r *ArchiveResource) updateComputedValues(data *ArchiveResourceModel, fileC
 	// Calculate checksums
 	content, err := os.ReadFile(data.Path.ValueString())
 	if err == nil {
-		md5sum := md5.Sum(content)
-		data.MD5 = types.StringValue(hex.EncodeToString(md5sum[:]))
+		data.MD5 = types.StringNull()
 
 		sha256sum := sha256.Sum256(content)
 		data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))

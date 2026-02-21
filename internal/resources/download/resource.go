@@ -5,7 +5,6 @@ package download
 
 import (
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -135,7 +134,7 @@ func (r *DownloadResource) Schema(ctx context.Context, req resource.SchemaReques
 				Default:     listdefault.StaticValue(types.ListValueMust(types.StringType, []attr.Value{})),
 			},
 			"expected_checksum": schema.StringAttribute{
-				Description: "Expected checksum for verification (format: algorithm:hash, e.g., sha256:abc123...).",
+				Description: "Expected checksum for verification (format: algorithm:hash, supported algorithm: sha256).",
 				Optional:    true,
 			},
 			"concurrency": schema.Int64Attribute{
@@ -186,7 +185,7 @@ func (r *DownloadResource) Schema(ctx context.Context, req resource.SchemaReques
 				Computed:    true,
 			},
 			"md5": schema.StringAttribute{
-				Description: "MD5 checksum of the downloaded file (for single file download).",
+				Description: "Deprecated insecure checksum field. Always null.",
 				Computed:    true,
 			},
 			"sha256": schema.StringAttribute{
@@ -362,7 +361,6 @@ type downloadResult struct {
 	bytesTransferred int64
 	filesTransferred int
 	duration         time.Duration
-	md5              string
 	sha256           string
 }
 
@@ -495,9 +493,6 @@ func (r *DownloadResource) calculateFileChecksums(ctx context.Context, data *Dow
 		return
 	}
 
-	md5sum := md5.Sum(content)
-	result.md5 = hex.EncodeToString(md5sum[:])
-
 	sha256sum := sha256.Sum256(content)
 	result.sha256 = hex.EncodeToString(sha256sum[:])
 }
@@ -515,8 +510,7 @@ func (r *DownloadResource) updateFileChecksums(ctx context.Context, data *Downlo
 		return
 	}
 
-	md5sum := md5.Sum(content)
-	data.MD5 = types.StringValue(hex.EncodeToString(md5sum[:]))
+	data.MD5 = types.StringNull()
 
 	sha256sum := sha256.Sum256(content)
 	data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))
@@ -534,8 +528,6 @@ func (r *DownloadResource) verifyChecksum(expected string, result *downloadResul
 
 	var actualHash string
 	switch algo {
-	case "md5":
-		actualHash = result.md5
 	case "sha256":
 		actualHash = result.sha256
 	default:
@@ -611,11 +603,7 @@ func (r *DownloadResource) updateComputedValues(data *DownloadResourceModel, res
 	data.FilesTransferred = types.Int64Value(int64(result.filesTransferred))
 	data.DurationMs = types.Int64Value(result.duration.Milliseconds())
 
-	if result.md5 != "" {
-		data.MD5 = types.StringValue(result.md5)
-	} else {
-		data.MD5 = types.StringNull()
-	}
+	data.MD5 = types.StringNull()
 
 	if result.sha256 != "" {
 		data.SHA256 = types.StringValue(result.sha256)

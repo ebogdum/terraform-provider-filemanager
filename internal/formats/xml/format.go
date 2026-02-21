@@ -296,78 +296,36 @@ func serializeElement(w io.Writer, name string, value any, currentIndent, indent
 
 // serializeMapElement serializes a map as an XML element with attributes and children.
 func serializeMapElement(w io.Writer, name string, m map[string]any, currentIndent, indentStep string, opts plugin.SerializeOptions) error {
-	// Start opening tag
 	if _, err := fmt.Fprintf(w, "%s<%s", currentIndent, name); err != nil {
 		return err
 	}
 
-	// Collect attributes and children
-	var attrs []string
-	var textContent string
-	hasChildren := false
-
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	if opts.SortKeys {
-		sort.Strings(keys)
-	}
-
-	for _, k := range keys {
-		v := m[k]
-		if strings.HasPrefix(k, "@") {
-			// Attribute
-			attrName := strings.TrimPrefix(k, "@")
-			attrs = append(attrs, fmt.Sprintf(` %s="%s"`, attrName, escapeXMLAttr(fmt.Sprintf("%v", v))))
-		} else if k == "#text" {
-			textContent = fmt.Sprintf("%v", v)
-		} else {
-			hasChildren = true
-		}
-	}
-
-	// Write attributes
+	keys, attrs, textContent, hasChildren := collectMapElementParts(m, opts.SortKeys)
 	for _, attr := range attrs {
 		if _, err := io.WriteString(w, attr); err != nil {
 			return err
 		}
 	}
 
-	// Check if empty element
 	if !hasChildren && textContent == "" {
 		if _, err := io.WriteString(w, "/>"); err != nil {
 			return err
 		}
-		if !opts.Compact {
-			if _, err := io.WriteString(w, "\n"); err != nil {
-				return err
-			}
-		}
-		return nil
+		return writeOptionalNewline(w, opts.Compact)
 	}
 
-	// Close opening tag
 	if _, err := io.WriteString(w, ">"); err != nil {
 		return err
 	}
 
-	// Write children
 	if hasChildren {
-		if !opts.Compact {
-			if _, err := io.WriteString(w, "\n"); err != nil {
-				return err
-			}
+		if err := writeOptionalNewline(w, opts.Compact); err != nil {
+			return err
 		}
 
 		childIndent := currentIndent + indentStep
-		for _, k := range keys {
-			v := m[k]
-			if !strings.HasPrefix(k, "@") && k != "#text" {
-				if err := serializeElement(w, k, v, childIndent, indentStep, opts); err != nil {
-					return err
-				}
-			}
+		if err := writeMapChildren(w, m, keys, childIndent, indentStep, opts); err != nil {
+			return err
 		}
 
 		if textContent != "" {
@@ -380,7 +338,6 @@ func serializeMapElement(w io.Writer, name string, m map[string]any, currentInde
 			return err
 		}
 	} else {
-		// Just text content
 		if _, err := io.WriteString(w, escapeXML(textContent)); err != nil {
 			return err
 		}
@@ -389,13 +346,7 @@ func serializeMapElement(w io.Writer, name string, m map[string]any, currentInde
 		}
 	}
 
-	if !opts.Compact {
-		if _, err := io.WriteString(w, "\n"); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return writeOptionalNewline(w, opts.Compact)
 }
 
 // escapeXML escapes special characters in XML text content.
@@ -415,6 +366,50 @@ func escapeXMLAttr(s string) string {
 	s = strings.ReplaceAll(s, "\"", "&quot;")
 	s = strings.ReplaceAll(s, "'", "&apos;")
 	return s
+}
+
+func collectMapElementParts(m map[string]any, sortKeys bool) (keys []string, attrs []string, textContent string, hasChildren bool) {
+	keys = make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	if sortKeys {
+		sort.Strings(keys)
+	}
+
+	for _, k := range keys {
+		v := m[k]
+		switch {
+		case strings.HasPrefix(k, "@"):
+			attrName := strings.TrimPrefix(k, "@")
+			attrs = append(attrs, fmt.Sprintf(` %s="%s"`, attrName, escapeXMLAttr(fmt.Sprintf("%v", v))))
+		case k == "#text":
+			textContent = fmt.Sprintf("%v", v)
+		default:
+			hasChildren = true
+		}
+	}
+	return keys, attrs, textContent, hasChildren
+}
+
+func writeMapChildren(w io.Writer, m map[string]any, keys []string, childIndent, indentStep string, opts plugin.SerializeOptions) error {
+	for _, k := range keys {
+		if strings.HasPrefix(k, "@") || k == "#text" {
+			continue
+		}
+		if err := serializeElement(w, k, m[k], childIndent, indentStep, opts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeOptionalNewline(w io.Writer, compact bool) error {
+	if compact {
+		return nil
+	}
+	_, err := io.WriteString(w, "\n")
+	return err
 }
 
 // Merge merges two XML values according to the strategy.

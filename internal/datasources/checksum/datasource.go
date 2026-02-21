@@ -5,8 +5,6 @@ package checksum
 
 import (
 	"context"
-	"crypto/md5"
-	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -67,10 +65,10 @@ func (d *ChecksumDataSource) Schema(ctx context.Context, req datasource.SchemaRe
 				Required:    true,
 			},
 			"algorithm": schema.StringAttribute{
-				Description: "Checksum algorithm: md5, sha1, sha256, sha512.",
+				Description: "Checksum algorithm: sha256, sha512.",
 				Optional:    true,
 				Validators: []validator.String{
-					stringvalidator.OneOf("md5", "sha1", "sha256", "sha512"),
+					stringvalidator.OneOf("sha256", "sha512"),
 				},
 			},
 			"service": schema.StringAttribute{
@@ -169,10 +167,6 @@ func (d *ChecksumDataSource) Read(ctx context.Context, req datasource.ReadReques
 
 	var h hash.Hash
 	switch algorithm {
-	case "md5":
-		h = md5.New()
-	case "sha1":
-		h = sha1.New()
 	case "sha256":
 		h = sha256.New()
 	case "sha512":

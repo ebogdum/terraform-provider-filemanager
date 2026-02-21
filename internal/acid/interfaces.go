@@ -56,7 +56,7 @@ type WriteOptions struct {
 	// ExpectedChecksum is the expected checksum for verification.
 	ExpectedChecksum string
 
-	// ChecksumAlgo is the checksum algorithm (md5, sha256, sha512).
+	// ChecksumAlgo is the checksum algorithm (sha256, sha512).
 	ChecksumAlgo string
 
 	// UID is the user ID for chown (Unix only, -1 to skip).

@@ -390,114 +390,157 @@ func (p *Plugin) validateClusters(clusters []any) []plugin.ValidationError {
 			continue
 		}
 
-		// Validate name
-		if name, ok := clusterMap["name"].(string); ok {
-			if usedNames[name] {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("static_resources.clusters[%d].name", i),
-					Message: fmt.Sprintf("duplicate cluster name: %s", name),
-				})
-			}
-			usedNames[name] = true
-		} else {
-			errors = append(errors, plugin.ValidationError{
-				Path:    fmt.Sprintf("static_resources.clusters[%d].name", i),
-				Message: "cluster name is required",
-			})
-		}
-
-		// Validate type/cluster_type
-		if clusterType, ok := clusterMap["type"].(string); ok {
-			validTypes := []string{"STATIC", "STRICT_DNS", "LOGICAL_DNS", "EDS", "ORIGINAL_DST"}
-			found := false
-			for _, vt := range validTypes {
-				if clusterType == vt {
-					found = true
-					break
-				}
-			}
-			if !found {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("static_resources.clusters[%d].type", i),
-					Message: fmt.Sprintf("invalid cluster type: %s", clusterType),
-				})
-			}
-		}
-
-		// Validate lb_policy
-		if lbPolicy, ok := clusterMap["lb_policy"].(string); ok {
-			validPolicies := []string{
-				"ROUND_ROBIN", "LEAST_REQUEST", "RING_HASH", "RANDOM",
-				"MAGLEV", "CLUSTER_PROVIDED", "LOAD_BALANCING_POLICY_CONFIG",
-			}
-			found := false
-			for _, vp := range validPolicies {
-				if lbPolicy == vp {
-					found = true
-					break
-				}
-			}
-			if !found {
-				errors = append(errors, plugin.ValidationError{
-					Path:    fmt.Sprintf("static_resources.clusters[%d].lb_policy", i),
-					Message: fmt.Sprintf("invalid lb_policy: %s", lbPolicy),
-				})
-			}
-		}
-
-		// Validate load_assignment
-		if loadAssignment, ok := clusterMap["load_assignment"].(map[string]any); ok {
-			errors = append(errors, p.validateLoadAssignment(loadAssignment, fmt.Sprintf("static_resources.clusters[%d].load_assignment", i))...)
-		}
-
-		// Validate health_checks
-		if healthChecks, ok := clusterMap["health_checks"].([]any); ok {
-			errors = append(errors, p.validateHealthChecks(healthChecks, fmt.Sprintf("static_resources.clusters[%d]", i))...)
-		}
+		errors = append(errors, validateClusterName(clusterMap, i, usedNames)...)
+		errors = append(errors, validateClusterType(clusterMap, i)...)
+		errors = append(errors, validateClusterLBPolicy(clusterMap, i)...)
+		errors = append(errors, p.validateClusterLoadAssignment(clusterMap, i)...)
+		errors = append(errors, p.validateClusterHealthChecks(clusterMap, i)...)
 	}
-
 	return errors
 }
 
 func (p *Plugin) validateLoadAssignment(la map[string]any, path string) []plugin.ValidationError {
 	var errors []plugin.ValidationError
-
-	// Validate cluster_name
-	if clusterName, ok := la["cluster_name"].(string); ok {
-		if clusterName == "" {
-			errors = append(errors, plugin.ValidationError{
-				Path:    path + ".cluster_name",
-				Message: "cluster_name should not be empty",
-			})
-		}
-	}
-
-	// Validate endpoints
-	if endpoints, ok := la["endpoints"].([]any); ok {
-		for i, ep := range endpoints {
-			epMap, ok := ep.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			if lbEndpoints, ok := epMap["lb_endpoints"].([]any); ok {
-				for j, lbEp := range lbEndpoints {
-					lbEpMap, ok := lbEp.(map[string]any)
-					if !ok {
-						continue
-					}
-
-					if endpoint, ok := lbEpMap["endpoint"].(map[string]any); ok {
-						if address, ok := endpoint["address"].(map[string]any); ok {
-							errors = append(errors, p.validateAddress(address, fmt.Sprintf("%s.endpoints[%d].lb_endpoints[%d].endpoint.address", path, i, j))...)
-						}
-					}
-				}
-			}
-		}
-	}
-
+	errors = append(errors, validateLoadAssignmentClusterName(la, path)...)
+	errors = append(errors, p.validateLoadAssignmentEndpoints(la, path)...)
 	return errors
+}
+
+func validateClusterName(clusterMap map[string]any, index int, usedNames map[string]bool) []plugin.ValidationError {
+	path := fmt.Sprintf("static_resources.clusters[%d].name", index)
+	name, ok := clusterMap["name"].(string)
+	if !ok {
+		return []plugin.ValidationError{{
+			Path:    path,
+			Message: "cluster name is required",
+		}}
+	}
+
+	if usedNames[name] {
+		return []plugin.ValidationError{{
+			Path:    path,
+			Message: fmt.Sprintf("duplicate cluster name: %s", name),
+		}}
+	}
+
+	usedNames[name] = true
+	return nil
+}
+
+func validateClusterType(clusterMap map[string]any, index int) []plugin.ValidationError {
+	clusterType, ok := clusterMap["type"].(string)
+	if !ok {
+		return nil
+	}
+
+	validTypes := []string{"STATIC", "STRICT_DNS", "LOGICAL_DNS", "EDS", "ORIGINAL_DST"}
+	if envoyContains(validTypes, clusterType) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    fmt.Sprintf("static_resources.clusters[%d].type", index),
+		Message: fmt.Sprintf("invalid cluster type: %s", clusterType),
+	}}
+}
+
+func validateClusterLBPolicy(clusterMap map[string]any, index int) []plugin.ValidationError {
+	lbPolicy, ok := clusterMap["lb_policy"].(string)
+	if !ok {
+		return nil
+	}
+
+	validPolicies := []string{
+		"ROUND_ROBIN", "LEAST_REQUEST", "RING_HASH", "RANDOM",
+		"MAGLEV", "CLUSTER_PROVIDED", "LOAD_BALANCING_POLICY_CONFIG",
+	}
+	if envoyContains(validPolicies, lbPolicy) {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    fmt.Sprintf("static_resources.clusters[%d].lb_policy", index),
+		Message: fmt.Sprintf("invalid lb_policy: %s", lbPolicy),
+	}}
+}
+
+func (p *Plugin) validateClusterLoadAssignment(clusterMap map[string]any, index int) []plugin.ValidationError {
+	loadAssignment, ok := clusterMap["load_assignment"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return p.validateLoadAssignment(loadAssignment, fmt.Sprintf("static_resources.clusters[%d].load_assignment", index))
+}
+
+func (p *Plugin) validateClusterHealthChecks(clusterMap map[string]any, index int) []plugin.ValidationError {
+	healthChecks, ok := clusterMap["health_checks"].([]any)
+	if !ok {
+		return nil
+	}
+	return p.validateHealthChecks(healthChecks, fmt.Sprintf("static_resources.clusters[%d]", index))
+}
+
+func validateLoadAssignmentClusterName(la map[string]any, path string) []plugin.ValidationError {
+	clusterName, ok := la["cluster_name"].(string)
+	if !ok || clusterName != "" {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    path + ".cluster_name",
+		Message: "cluster_name should not be empty",
+	}}
+}
+
+func (p *Plugin) validateLoadAssignmentEndpoints(la map[string]any, path string) []plugin.ValidationError {
+	endpoints, ok := la["endpoints"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for i, endpoint := range endpoints {
+		errors = append(errors, p.validateLBEndpoints(endpoint, path, i)...)
+	}
+	return errors
+}
+
+func (p *Plugin) validateLBEndpoints(endpoint any, path string, endpointIndex int) []plugin.ValidationError {
+	epMap, ok := endpoint.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	lbEndpoints, ok := epMap["lb_endpoints"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for j, lbEndpoint := range lbEndpoints {
+		errors = append(errors, p.validateLBEndpointAddress(lbEndpoint, path, endpointIndex, j)...)
+	}
+	return errors
+}
+
+func (p *Plugin) validateLBEndpointAddress(lbEndpoint any, path string, endpointIndex, lbIndex int) []plugin.ValidationError {
+	lbEndpointMap, ok := lbEndpoint.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	endpoint, ok := lbEndpointMap["endpoint"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	address, ok := endpoint["address"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	addressPath := fmt.Sprintf("%s.endpoints[%d].lb_endpoints[%d].endpoint.address", path, endpointIndex, lbIndex)
+	return p.validateAddress(address, addressPath)
 }
 
 func (p *Plugin) validateHealthChecks(hc []any, parentPath string) []plugin.ValidationError {
@@ -746,115 +789,213 @@ func (p *Plugin) validateAccessLog(al map[string]any, path string) []plugin.Vali
 
 // ValidateSemantic performs semantic validation.
 func (p *Plugin) ValidateSemantic(config any) ([]plugin.ValidationError, error) {
-	var errors []plugin.ValidationError
-
 	configMap, ok := config.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("config must be a map")
 	}
 
-	// Check for either static or dynamic resources
-	hasStatic := false
-	hasDynamic := false
-
-	if staticRes, ok := configMap["static_resources"].(map[string]any); ok {
-		if listeners, ok := staticRes["listeners"].([]any); ok && len(listeners) > 0 {
-			hasStatic = true
-		}
-		if clusters, ok := staticRes["clusters"].([]any); ok && len(clusters) > 0 {
-			hasStatic = true
-		}
-	}
-
-	if _, ok := configMap["dynamic_resources"]; ok {
-		hasDynamic = true
-	}
-
-	if !hasStatic && !hasDynamic {
-		errors = append(errors, plugin.ValidationError{
-			Path:    "",
-			Message: "configuration should have either static_resources or dynamic_resources",
-		})
-	}
-
-	// Collect cluster names for reference validation
-	clusterNames := make(map[string]bool)
-	if staticRes, ok := configMap["static_resources"].(map[string]any); ok {
-		if clusters, ok := staticRes["clusters"].([]any); ok {
-			for _, cluster := range clusters {
-				if clusterMap, ok := cluster.(map[string]any); ok {
-					if name, ok := clusterMap["name"].(string); ok {
-						clusterNames[name] = true
-					}
-				}
-			}
-		}
-
-		// Validate cluster references in listeners
-		if listeners, ok := staticRes["listeners"].([]any); ok {
-			for i, listener := range listeners {
-				if listenerMap, ok := listener.(map[string]any); ok {
-					if filterChains, ok := listenerMap["filter_chains"].([]any); ok {
-						for _, fc := range filterChains {
-							if fcMap, ok := fc.(map[string]any); ok {
-								if filters, ok := fcMap["filters"].([]any); ok {
-									for _, filter := range filters {
-										if filterMap, ok := filter.(map[string]any); ok {
-											if typedConfig, ok := filterMap["typed_config"].(map[string]any); ok {
-												// Check route_config for cluster references
-												if routeConfig, ok := typedConfig["route_config"].(map[string]any); ok {
-													if virtualHosts, ok := routeConfig["virtual_hosts"].([]any); ok {
-														for _, vh := range virtualHosts {
-															if vhMap, ok := vh.(map[string]any); ok {
-																if routes, ok := vhMap["routes"].([]any); ok {
-																	for _, route := range routes {
-																		if routeMap, ok := route.(map[string]any); ok {
-																			if routeAction, ok := routeMap["route"].(map[string]any); ok {
-																				if cluster, ok := routeAction["cluster"].(string); ok {
-																					if !clusterNames[cluster] {
-																						errors = append(errors, plugin.ValidationError{
-																							Path:    fmt.Sprintf("static_resources.listeners[%d]", i),
-																							Message: fmt.Sprintf("route references unknown cluster: %s", cluster),
-																						})
-																					}
-																				}
-																			}
-																		}
-																	}
-																}
-															}
-														}
-													}
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Security warnings
-	if admin, ok := configMap["admin"].(map[string]any); ok {
-		if address, ok := admin["address"].(map[string]any); ok {
-			if socketAddr, ok := address["socket_address"].(map[string]any); ok {
-				if addr, ok := socketAddr["address"].(string); ok {
-					if addr == "0.0.0.0" {
-						errors = append(errors, plugin.ValidationError{
-							Path:    "admin.address.socket_address.address",
-							Message: "admin interface bound to all interfaces (0.0.0.0) - consider restricting access",
-						})
-					}
-				}
-			}
-		}
-	}
-
+	var errors []plugin.ValidationError
+	errors = append(errors, validateEnvoyResourcePresence(configMap)...)
+	errors = append(errors, p.validateEnvoyClusterReferences(configMap)...)
+	errors = append(errors, validateEnvoyAdminBinding(configMap)...)
 	return errors, nil
+}
+
+func validateEnvoyResourcePresence(configMap map[string]any) []plugin.ValidationError {
+	hasStatic := false
+	if staticRes, ok := configMap["static_resources"].(map[string]any); ok {
+		hasStatic = hasStaticResources(staticRes)
+	}
+
+	_, hasDynamic := configMap["dynamic_resources"]
+	if hasStatic || hasDynamic {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "",
+		Message: "configuration should have either static_resources or dynamic_resources",
+	}}
+}
+
+func hasStaticResources(staticRes map[string]any) bool {
+	if listeners, ok := staticRes["listeners"].([]any); ok && len(listeners) > 0 {
+		return true
+	}
+	if clusters, ok := staticRes["clusters"].([]any); ok && len(clusters) > 0 {
+		return true
+	}
+	return false
+}
+
+func (p *Plugin) validateEnvoyClusterReferences(configMap map[string]any) []plugin.ValidationError {
+	staticRes, ok := configMap["static_resources"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	clusterNames := collectEnvoyClusterNames(staticRes["clusters"])
+	listeners, ok := staticRes["listeners"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for i, listener := range listeners {
+		errors = append(errors, validateListenerClusterRefs(listener, i, clusterNames)...)
+	}
+	return errors
+}
+
+func collectEnvoyClusterNames(clustersAny any) map[string]bool {
+	clusterNames := make(map[string]bool)
+	clusters, ok := clustersAny.([]any)
+	if !ok {
+		return clusterNames
+	}
+
+	for _, cluster := range clusters {
+		clusterMap, ok := cluster.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, ok := clusterMap["name"].(string)
+		if ok {
+			clusterNames[name] = true
+		}
+	}
+	return clusterNames
+}
+
+func validateListenerClusterRefs(listener any, listenerIndex int, clusterNames map[string]bool) []plugin.ValidationError {
+	listenerMap, ok := listener.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	filterChains, ok := listenerMap["filter_chains"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for _, filterChain := range filterChains {
+		errors = append(errors, validateFilterChainClusterRefs(filterChain, listenerIndex, clusterNames)...)
+	}
+	return errors
+}
+
+func validateFilterChainClusterRefs(filterChain any, listenerIndex int, clusterNames map[string]bool) []plugin.ValidationError {
+	filterChainMap, ok := filterChain.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	filters, ok := filterChainMap["filters"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for _, filter := range filters {
+		errors = append(errors, validateFilterClusterRefs(filter, listenerIndex, clusterNames)...)
+	}
+	return errors
+}
+
+func validateFilterClusterRefs(filter any, listenerIndex int, clusterNames map[string]bool) []plugin.ValidationError {
+	filterMap, ok := filter.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	typedConfig, ok := filterMap["typed_config"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	routeConfig, ok := typedConfig["route_config"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	virtualHosts, ok := routeConfig["virtual_hosts"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for _, virtualHost := range virtualHosts {
+		errors = append(errors, validateVirtualHostClusterRefs(virtualHost, listenerIndex, clusterNames)...)
+	}
+	return errors
+}
+
+func validateVirtualHostClusterRefs(virtualHost any, listenerIndex int, clusterNames map[string]bool) []plugin.ValidationError {
+	virtualHostMap, ok := virtualHost.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	routes, ok := virtualHostMap["routes"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var errors []plugin.ValidationError
+	for _, route := range routes {
+		errors = append(errors, validateRouteClusterRef(route, listenerIndex, clusterNames)...)
+	}
+	return errors
+}
+
+func validateRouteClusterRef(route any, listenerIndex int, clusterNames map[string]bool) []plugin.ValidationError {
+	routeMap, ok := route.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	routeAction, ok := routeMap["route"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	cluster, ok := routeAction["cluster"].(string)
+	if !ok || clusterNames[cluster] {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    fmt.Sprintf("static_resources.listeners[%d]", listenerIndex),
+		Message: fmt.Sprintf("route references unknown cluster: %s", cluster),
+	}}
+}
+
+func validateEnvoyAdminBinding(configMap map[string]any) []plugin.ValidationError {
+	admin, ok := configMap["admin"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	address, ok := admin["address"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	socketAddr, ok := address["socket_address"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	addr, ok := socketAddr["address"].(string)
+	if !ok || addr != "0.0.0.0" {
+		return nil
+	}
+
+	return []plugin.ValidationError{{
+		Path:    "admin.address.socket_address.address",
+		Message: "admin interface bound to all interfaces (0.0.0.0) - consider restricting access",
+	}}
 }
 
 // Normalize normalizes the configuration.
@@ -938,4 +1079,13 @@ func isValidDuration(d string) bool {
 	// Envoy duration format: number + s (seconds)
 	pattern := regexp.MustCompile(`^\d+(\.\d+)?s$`)
 	return pattern.MatchString(d)
+}
+
+func envoyContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

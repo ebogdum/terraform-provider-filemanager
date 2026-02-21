@@ -5,7 +5,6 @@ package yaml
 
 import (
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -93,7 +92,7 @@ func (d *YAMLDataSource) Schema(ctx context.Context, req datasource.SchemaReques
 				Computed:    true,
 			},
 			"md5": schema.StringAttribute{
-				Description: "MD5 checksum of the file content.",
+				Description: "Deprecated insecure checksum field. Always null.",
 				Computed:    true,
 			},
 			"sha256": schema.StringAttribute{
@@ -206,7 +205,6 @@ func (d *YAMLDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	}
 
 	// Calculate checksums
-	md5Hash := md5.Sum(content)
 	sha256Hash := sha256.Sum256(content)
 
 	// Set values
@@ -215,7 +213,7 @@ func (d *YAMLDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	data.QueryResult = queryResultVal
 	data.Content = types.StringValue(string(content))
 	data.Size = types.Int64Value(int64(len(content)))
-	data.MD5 = types.StringValue(hex.EncodeToString(md5Hash[:]))
+	data.MD5 = types.StringNull()
 	data.SHA256 = types.StringValue(hex.EncodeToString(sha256Hash[:]))
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
