@@ -11,6 +11,9 @@ TAG_SHAS=()
 contains_sha() {
   local needle="$1"
   local value
+  if [[ ${#TAG_SHAS[@]} -eq 0 ]]; then
+    return 1
+  fi
   for value in "${TAG_SHAS[@]}"; do
     if [[ "$value" == "$needle" ]]; then
       return 0

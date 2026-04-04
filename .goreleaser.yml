@@ -31,7 +31,8 @@ builds:
     binary: '{{ .ProjectName }}_v{{ .Version }}'
 
 archives:
-  - format: zip
+  - formats:
+      - zip
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
 
 checksum:
@@ -54,11 +55,7 @@ release:
   header: |
     ## terraform-provider-filemanager v{{ .Version }}
 
-    ### Highlights
-    - New `filemanager_tfvars_file` resource for managing Terraform variable files
-    - New `filemanager_tfvars` data source for reading tfvars files
-    - Native dynamic type support - pass complex values directly from other resources
-    - Internal variable interpolation with dependency resolution
+    See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 changelog:
   sort: asc

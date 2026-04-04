@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-04-04
+
+### Security
+- Remove `env` template function from `template_file` resource (SSTI risk)
+- Remove `tls_skip_verify` from FTP service (was rejected by backend anyway)
+- Fix SSH `insecure_skip_host_key` config key mismatch (flag was silently ignored)
+- Mark `sha256` as sensitive in `sensitive_file` resource
+- Add source path validation against `base_path` in file resource
+- Simplify `ImportState` to prevent arbitrary file reads
+- Validate backup directory paths against traversal attacks
+- Validate XML element names before serialization
+- Remove credential file paths from error messages
+- Remove sensitive SHA256 hashes from drift detection warnings
+
+### Fixed
+- Cross-device atomic writes now use temp-file + rename (preserves ACID guarantee)
+- SSH agent connection no longer leaked on backend close
+- Connection pool race condition in `Get()` (lock-held health check)
+- Pool cleanup no longer blocks on network timeouts (close outside mutex)
+- SSH/FTP recursive delete now has depth limits and skips symlinks
+- FTP error 550 disambiguation (not-found vs permission-denied)
+- `toJSON` template function now produces actual JSON (was using `fmt.Sprintf`)
+- `toInt` template function logs warning on parse failure instead of silent zero
+- `ParseOctalMode` logs warning on invalid permission strings
+- `ComputePathOutputs` handles `filepath.Abs` errors gracefully
+- `numberValueToGo` handles int64 overflow correctly
+- `CountingReader` is now thread-safe (atomic operations)
+- S3 service `Update` now closes old backend before replacing
+- Archive checksum computed via streaming (no longer loads entire file into memory)
+- Remove double-close of gzWriter in backup
+- Remove dead traversal check in lock.go
+- Log backup cleanup errors instead of silently swallowing
+
+### Added
+- `~username` expansion support in `ExpandPath`
+- `ReadAllLimited` utility for bounded reads
+- Improved symlink `target_type` description (portability implications)
+
+### Dependencies
+- Bump `github.com/antchfx/xpath` from 1.2.4 to 1.3.6
+- Bump `github.com/go-jose/go-jose/v4` from 4.1.3 to 4.1.4
+- Bump `go.opentelemetry.io/otel/sdk` from 1.38.0 to 1.40.0
+- Bump `google.golang.org/grpc` from 1.78.0 to 1.79.3
+
 ## [1.2.0] - 2026-01-23
 
 ### Added
