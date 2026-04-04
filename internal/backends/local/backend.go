@@ -100,16 +100,29 @@ func (b *Backend) Ping(ctx context.Context) error {
 }
 
 // resolvePath resolves a relative path against the base path.
-func (b *Backend) resolvePath(path string) (string, error) {
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path), nil
+func (b *Backend) resolvePath(p string) (string, error) {
+	var resolved string
+	if filepath.IsAbs(p) {
+		resolved = filepath.Clean(p)
+	} else if b.basePath != "" {
+		resolved = filepath.Clean(filepath.Join(b.basePath, p))
+	} else {
+		var err error
+		resolved, err = filepath.Abs(p)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve path: %w", err)
+		}
+		return resolved, nil
 	}
 
+	// Enforce basePath containment
 	if b.basePath != "" {
-		return filepath.Join(b.basePath, path), nil
+		if resolved != b.basePath && !strings.HasPrefix(resolved+string(filepath.Separator), b.basePath+string(filepath.Separator)) {
+			return "", fmt.Errorf("path %q escapes base path %q", p, b.basePath)
+		}
 	}
 
-	return filepath.Abs(path)
+	return resolved, nil
 }
 
 // Read reads a file and returns an io.ReadCloser.
@@ -148,13 +161,6 @@ func (b *Backend) Write(ctx context.Context, path string, r io.Reader, opts plug
 		return err
 	}
 
-	// Check if file exists and we're not overwriting
-	if !opts.Overwrite {
-		if _, err := os.Stat(absPath); err == nil {
-			return plugin.ErrPathExists
-		}
-	}
-
 	// Use atomic writer for safe writes
 	writeOpts := acid.WriteOptions{
 		Mode:             opts.Mode,
@@ -181,11 +187,11 @@ func (b *Backend) Write(ctx context.Context, path string, r io.Reader, opts plug
 	}
 
 	// Non-atomic write
-	return b.directWrite(ctx, absPath, r, writeOpts)
+	return b.directWrite(ctx, absPath, r, writeOpts, opts.Overwrite)
 }
 
 // directWrite performs a direct (non-atomic) write.
-func (b *Backend) directWrite(ctx context.Context, path string, r io.Reader, opts acid.WriteOptions) error {
+func (b *Backend) directWrite(ctx context.Context, path string, r io.Reader, opts acid.WriteOptions, overwrite bool) error {
 	if opts.CreateDirs {
 		dir := filepath.Dir(path)
 		if err := os.MkdirAll(dir, opts.DirMode); err != nil {
@@ -194,8 +200,14 @@ func (b *Backend) directWrite(ctx context.Context, path string, r io.Reader, opt
 	}
 
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	if !overwrite {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	}
 	file, err := os.OpenFile(path, flags, opts.Mode)
 	if err != nil {
+		if os.IsExist(err) {
+			return plugin.ErrPathExists
+		}
 		return err
 	}
 	defer file.Close()
@@ -537,7 +549,18 @@ func (b *Backend) Symlink(ctx context.Context, target, link string) error {
 		return err
 	}
 
-	// Target is used as-is - resolution is handled by the caller
+	// Validate symlink target stays within basePath when basePath is set
+	if b.basePath != "" {
+		absTarget := target
+		if !filepath.IsAbs(target) {
+			absTarget = filepath.Join(filepath.Dir(absLink), target)
+		}
+		absTarget = filepath.Clean(absTarget)
+		if absTarget != b.basePath && !strings.HasPrefix(absTarget+string(filepath.Separator), b.basePath+string(filepath.Separator)) {
+			return fmt.Errorf("symlink target %q escapes base path %q", target, b.basePath)
+		}
+	}
+
 	return os.Symlink(target, absLink)
 }
 

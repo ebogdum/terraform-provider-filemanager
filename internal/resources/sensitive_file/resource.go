@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -173,6 +172,7 @@ Manages a file with sensitive content. The content is marked as sensitive and wi
 			"sha256": schema.StringAttribute{
 				Description: "SHA-256 checksum of the file content.",
 				Computed:    true,
+				Sensitive:   true,
 			},
 			"directory": schema.StringAttribute{
 				Description: "The parent directory of the path.",
@@ -300,6 +300,15 @@ func (r *SensitiveFileResource) Read(ctx context.Context, req resource.ReadReque
 		return
 	}
 
+	// Compare computed SHA256 with stored value for drift detection
+	computedSha256 := hex.EncodeToString(func() []byte { h := sha256.Sum256(content); return h[:] }())
+	if !data.SHA256.IsNull() && data.SHA256.ValueString() != computedSha256 {
+		resp.Diagnostics.AddWarning(
+			"File content has changed externally",
+			fmt.Sprintf("File %s content has been modified outside of Terraform", data.Path.ValueString()),
+		)
+	}
+
 	r.updateComputedValues(&data, content)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -413,12 +422,9 @@ func (r *SensitiveFileResource) formatJSON(content []byte, data *SensitiveFileRe
 		return nil, fmt.Errorf("content is not valid JSON: %w", err)
 	}
 
-	// Sort keys if requested
-	if data.SortKeys.ValueBool() {
-		value = sortKeys(value)
-	}
-
 	// Serialize with pretty printing
+	// Note: encoding/json sorts map keys by default since Go maps are iterated in key order
+	// in json.Marshal. The sort_keys flag is handled implicitly.
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
@@ -434,31 +440,6 @@ func (r *SensitiveFileResource) formatJSON(content []byte, data *SensitiveFileRe
 	}
 
 	return buf.Bytes(), nil
-}
-
-// sortKeys recursively sorts map keys.
-func sortKeys(v any) any {
-	switch val := v.(type) {
-	case map[string]any:
-		sorted := make(map[string]any)
-		keys := make([]string, 0, len(val))
-		for k := range val {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			sorted[k] = sortKeys(val[k])
-		}
-		return sorted
-	case []any:
-		result := make([]any, len(val))
-		for i, item := range val {
-			result[i] = sortKeys(item)
-		}
-		return result
-	default:
-		return v
-	}
 }
 
 // getBackend returns the appropriate backend.

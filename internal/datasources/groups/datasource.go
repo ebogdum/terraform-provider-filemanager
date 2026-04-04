@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -241,6 +242,7 @@ func readGroup() ([]groupEntry, error) {
 
 	var entries []groupEntry
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1 MB max line
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -293,20 +295,14 @@ func LookupGroup(groupname string) (gid int, err error) {
 	return gidInt, nil
 }
 
-// matchPattern matches a string against a simple wildcard pattern.
+// matchPattern matches a string against a wildcard pattern using filepath.Match.
 func matchPattern(s, pattern string) bool {
-	if pattern == "*" {
+	if pattern == "" {
 		return true
 	}
-
-	if !strings.Contains(pattern, "*") {
+	matched, err := filepath.Match(pattern, s)
+	if err != nil {
 		return s == pattern
 	}
-
-	parts := strings.Split(pattern, "*")
-	if len(parts) == 2 {
-		return strings.HasPrefix(s, parts[0]) && strings.HasSuffix(s, parts[1])
-	}
-
-	return s == pattern
+	return matched
 }

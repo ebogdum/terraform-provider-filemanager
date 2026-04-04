@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
@@ -176,6 +177,9 @@ func (r *SwiftServiceResource) Schema(ctx context.Context, req resource.SchemaRe
 			"connected": schema.BoolAttribute{
 				Description: "Whether the service is currently connected.",
 				Computed:    true,
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"endpoint": schema.StringAttribute{
 				Description: "The Swift endpoint URL.",
@@ -382,7 +386,7 @@ func (r *SwiftServiceResource) Update(ctx context.Context, req resource.UpdateRe
 		_ = oldBackend.Close()
 	}
 
-	r.config.Registry.Backends.RemoveAlias(serviceID)
+	// Register new backend first to avoid window with no registered backend
 	if err := r.config.Registry.Backends.SetAlias(serviceID, backend); err != nil {
 		resp.Diagnostics.AddError("Failed to update Swift service registration", err.Error())
 		return

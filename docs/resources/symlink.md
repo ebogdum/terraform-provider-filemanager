@@ -47,7 +47,7 @@ Manages a symbolic link on the filesystem.
 - `create_parent_dirs` (Boolean) Create parent directories if they don't exist.
 - `force` (Boolean) Remove existing file/symlink at path before creating.
 - `service` (String) Service to use for file operations. Defaults to local filesystem.
-- `target_type` (String) How to treat the target path: 'absolute' resolves relative paths to absolute paths, 'relative' keeps the target as-is. Defaults to 'absolute'.
+- `target_type` (String) How to treat the target path: 'absolute' resolves relative targets to absolute paths (symlink breaks if directory tree moves), 'relative' keeps the target as-is (symlink is portable). Defaults to 'absolute'.
 
 ### Read-Only
 

@@ -4,7 +4,9 @@ package functions
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/function"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -53,6 +55,11 @@ func (f *GlobFunction) Run(ctx context.Context, req function.RunRequest, resp *f
 		return
 	}
 
+	if err := validateGlobPattern(pattern); err != nil {
+		resp.Error = function.ConcatFuncErrors(resp.Error, function.NewFuncError(err.Error()))
+		return
+	}
+
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		resp.Error = function.ConcatFuncErrors(resp.Error, function.NewFuncError("Failed to evaluate glob pattern: "+err.Error()))
@@ -71,4 +78,16 @@ func (f *GlobFunction) Run(ctx context.Context, req function.RunRequest, resp *f
 	}
 
 	resp.Error = function.ConcatFuncErrors(resp.Error, resp.Result.Set(ctx, result))
+}
+
+// validateGlobPattern rejects patterns targeting sensitive system directories.
+func validateGlobPattern(pattern string) error {
+	clean := filepath.Clean(pattern)
+	sensitivePrefixes := []string{"/etc/", "/root/", "/var/", "/proc/", "/sys/"}
+	for _, prefix := range sensitivePrefixes {
+		if strings.HasPrefix(clean, prefix) || clean == strings.TrimSuffix(prefix, "/") {
+			return fmt.Errorf("glob pattern %q accesses restricted directory", pattern)
+		}
+	}
+	return nil
 }

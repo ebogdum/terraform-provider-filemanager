@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
@@ -52,8 +53,7 @@ type FTPServiceResourceModel struct {
 	Timeout       types.String `tfsdk:"timeout"`
 	TLSEnabled    types.Bool   `tfsdk:"tls_enabled"`
 	ExplicitTLS   types.Bool   `tfsdk:"explicit_tls"`
-	TLSSkipVerify types.Bool   `tfsdk:"tls_skip_verify"`
-	PassiveMode   types.Bool   `tfsdk:"passive_mode"`
+	PassiveMode types.Bool `tfsdk:"passive_mode"`
 
 	// Outputs (Computed)
 	ID          types.String `tfsdk:"id"`
@@ -130,12 +130,6 @@ func (r *FTPServiceResource) Schema(ctx context.Context, req resource.SchemaRequ
 				Computed:    true,
 				Default:     booldefault.StaticBool(true),
 			},
-			"tls_skip_verify": schema.BoolAttribute{
-				Description: "Skip TLS certificate verification. WARNING: This is insecure and should only be used for testing.",
-				Optional:    true,
-				Computed:    true,
-				Default:     booldefault.StaticBool(false),
-			},
 			"passive_mode": schema.BoolAttribute{
 				Description: "Use passive mode for data connections. Defaults to true.",
 				Optional:    true,
@@ -145,6 +139,9 @@ func (r *FTPServiceResource) Schema(ctx context.Context, req resource.SchemaRequ
 			"connected": schema.BoolAttribute{
 				Description: "Whether the service is currently connected.",
 				Computed:    true,
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"endpoint": schema.StringAttribute{
 				Description: "The FTP endpoint in host:port format.",
@@ -218,8 +215,7 @@ func (r *FTPServiceResource) Create(ctx context.Context, req resource.CreateRequ
 		Password:      password,
 		BasePath:      data.BasePath.ValueString(),
 		Timeout:       timeout,
-		TLSEnabled:    data.TLSEnabled.ValueBool(),
-		TLSSkipVerify: data.TLSSkipVerify.ValueBool(),
+		TLSEnabled: data.TLSEnabled.ValueBool(),
 		Extra: map[string]any{
 			"explicit_tls": data.ExplicitTLS.ValueBool(),
 			"passive_mode": data.PassiveMode.ValueBool(),
@@ -312,8 +308,7 @@ func (r *FTPServiceResource) Update(ctx context.Context, req resource.UpdateRequ
 		Password:      password,
 		BasePath:      data.BasePath.ValueString(),
 		Timeout:       timeout,
-		TLSEnabled:    data.TLSEnabled.ValueBool(),
-		TLSSkipVerify: data.TLSSkipVerify.ValueBool(),
+		TLSEnabled: data.TLSEnabled.ValueBool(),
 		Extra: map[string]any{
 			"explicit_tls": data.ExplicitTLS.ValueBool(),
 			"passive_mode": data.PassiveMode.ValueBool(),

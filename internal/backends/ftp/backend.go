@@ -8,9 +8,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"math"
+	"net"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +67,7 @@ func (b *Backend) Connect(ctx context.Context, config plugin.BackendConfig) erro
 	if port == 0 {
 		port = 21
 	}
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 
 	// Set connection timeout
 	timeout := config.Timeout
@@ -88,6 +91,10 @@ func (b *Backend) Connect(ctx context.Context, config plugin.BackendConfig) erro
 		} else {
 			dialOpts = append(dialOpts, ftp.DialWithTLS(tlsConfig))
 		}
+	}
+
+	if !config.TLSEnabled && config.Username != "" && config.Username != "anonymous" {
+		log.Printf("[WARN] FTP connection to %s is using plaintext authentication. Credentials may be transmitted unencrypted. Consider enabling TLS.", config.Host)
 	}
 
 	// Passive mode (default)
@@ -155,15 +162,26 @@ func (b *Backend) Ping(ctx context.Context) error {
 }
 
 // resolvePath resolves a relative path against the base path.
-func (b *Backend) resolvePath(p string) string {
+func (b *Backend) resolvePath(p string) (string, error) {
 	p = path.Clean(p)
+
+	var resolved string
 	if path.IsAbs(p) {
-		return p
+		resolved = p
+	} else if b.basePath != "" {
+		resolved = path.Join(b.basePath, p)
+	} else {
+		return p, nil
 	}
+
+	// Enforce basePath containment
 	if b.basePath != "" {
-		return path.Join(b.basePath, p)
+		if resolved != b.basePath && !strings.HasPrefix(resolved+"/", b.basePath+"/") {
+			return "", fmt.Errorf("path %q escapes base path %q", p, b.basePath)
+		}
 	}
-	return p
+
+	return resolved, nil
 }
 
 // Read reads a file and returns an io.ReadCloser.
@@ -175,7 +193,10 @@ func (b *Backend) Read(ctx context.Context, filePath string) (io.ReadCloser, err
 		return nil, plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return nil, err
+	}
 
 	resp, err := b.conn.Retr(absPath)
 	if err != nil {
@@ -200,7 +221,10 @@ func (b *Backend) Write(ctx context.Context, filePath string, r io.Reader, opts 
 		return plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return err
+	}
 
 	// Check if file exists and we're not overwriting
 	if !opts.Overwrite {
@@ -259,7 +283,10 @@ func (b *Backend) Delete(ctx context.Context, filePath string) error {
 		return plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return err
+	}
 
 	// Check if it's a directory
 	entries, err := b.conn.List(absPath)
@@ -289,10 +316,13 @@ func (b *Backend) Exists(ctx context.Context, filePath string) (bool, error) {
 		return false, plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return false, err
+	}
 
 	// Try to get file size (works for files)
-	_, err := b.conn.FileSize(absPath)
+	_, err = b.conn.FileSize(absPath)
 	if err == nil {
 		return true, nil
 	}
@@ -318,7 +348,10 @@ func (b *Backend) Stat(ctx context.Context, filePath string) (*plugin.FileInfo, 
 		return nil, plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return nil, err
+	}
 
 	// Use LIST on parent directory to get file info
 	parentDir := path.Dir(absPath)
@@ -371,7 +404,10 @@ func (b *Backend) List(ctx context.Context, dirPath string, opts plugin.ListOpti
 		return nil, plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(dirPath)
+	absPath, err := b.resolvePath(dirPath)
+	if err != nil {
+		return nil, err
+	}
 
 	var results []plugin.FileInfo
 
@@ -406,8 +442,18 @@ func (b *Backend) List(ctx context.Context, dirPath string, opts plugin.ListOpti
 	return results, nil
 }
 
+const maxRecursionDepth = 100
+
 // walkDir recursively walks a directory.
-func (b *Backend) walkDir(dirPath string, results *[]plugin.FileInfo, opts plugin.ListOptions) error {
+func (b *Backend) walkDir(dirPath string, results *[]plugin.FileInfo, opts plugin.ListOptions, depth ...int) error {
+	currentDepth := 0
+	if len(depth) > 0 {
+		currentDepth = depth[0]
+	}
+	if currentDepth > maxRecursionDepth {
+		return fmt.Errorf("directory recursion depth exceeds maximum of %d", maxRecursionDepth)
+	}
+
 	entries, err := b.conn.List(dirPath)
 	if err != nil {
 		return err
@@ -428,7 +474,7 @@ func (b *Backend) walkDir(dirPath string, results *[]plugin.FileInfo, opts plugi
 
 		// Recurse into directories
 		if entry.Type == ftp.EntryTypeFolder {
-			if err := b.walkDir(entryPath, results, opts); err != nil {
+			if err := b.walkDir(entryPath, results, opts, currentDepth+1); err != nil {
 				continue // Skip errors in recursive listing
 			}
 		}
@@ -446,7 +492,10 @@ func (b *Backend) Mkdir(ctx context.Context, dirPath string, opts plugin.MkdirOp
 		return plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(dirPath)
+	absPath, err := b.resolvePath(dirPath)
+	if err != nil {
+		return err
+	}
 
 	if opts.Recursive {
 		return b.mkdirAll(absPath)
@@ -474,7 +523,10 @@ func (b *Backend) Rmdir(ctx context.Context, dirPath string, recursive bool) err
 		return plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(dirPath)
+	absPath, err := b.resolvePath(dirPath)
+	if err != nil {
+		return err
+	}
 
 	if recursive {
 		return b.removeAllRecursive(absPath)
@@ -494,7 +546,15 @@ func (b *Backend) Rmdir(ctx context.Context, dirPath string, recursive bool) err
 }
 
 // removeAllRecursive removes a directory and all its contents.
-func (b *Backend) removeAllRecursive(dirPath string) error {
+func (b *Backend) removeAllRecursive(dirPath string, depth ...int) error {
+	currentDepth := 0
+	if len(depth) > 0 {
+		currentDepth = depth[0]
+	}
+	if currentDepth > maxRecursionDepth {
+		return fmt.Errorf("directory recursion depth exceeds maximum of %d", maxRecursionDepth)
+	}
+
 	entries, err := b.conn.List(dirPath)
 	if err != nil {
 		return err
@@ -507,7 +567,7 @@ func (b *Backend) removeAllRecursive(dirPath string) error {
 
 		entryPath := path.Join(dirPath, entry.Name)
 		if entry.Type == ftp.EntryTypeFolder {
-			if err := b.removeAllRecursive(entryPath); err != nil {
+			if err := b.removeAllRecursive(entryPath, currentDepth+1); err != nil {
 				return err
 			}
 		} else {
@@ -599,8 +659,14 @@ func (b *Backend) CopyFile(ctx context.Context, src, dst string, opts plugin.Wri
 		return plugin.ErrNotConnected
 	}
 
-	absSrc := b.resolvePath(src)
-	absDst := b.resolvePath(dst)
+	absSrc, err := b.resolvePath(src)
+	if err != nil {
+		return err
+	}
+	absDst, err := b.resolvePath(dst)
+	if err != nil {
+		return err
+	}
 
 	// Download source file to memory
 	resp, err := b.conn.Retr(absSrc)
@@ -639,8 +705,14 @@ func (b *Backend) Rename(ctx context.Context, src, dst string) error {
 		return plugin.ErrNotConnected
 	}
 
-	absSrc := b.resolvePath(src)
-	absDst := b.resolvePath(dst)
+	absSrc, err := b.resolvePath(src)
+	if err != nil {
+		return err
+	}
+	absDst, err := b.resolvePath(dst)
+	if err != nil {
+		return err
+	}
 
 	return b.conn.Rename(absSrc, absDst)
 }
@@ -648,23 +720,30 @@ func (b *Backend) Rename(ctx context.Context, src, dst string) error {
 // Helper functions
 
 func isFTPNotFound(err error) bool {
-	if err == nil {
+	if nil == err {
 		return false
 	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "550") || // File not found, no access
-		strings.Contains(errStr, "not found") ||
-		strings.Contains(errStr, "No such file")
+	errStr := strings.ToLower(err.Error())
+	// Check explicit "not found" messages first, then fall back to 550
+	// which is ambiguous (used for both not-found and permission-denied).
+	if strings.Contains(errStr, "not found") || strings.Contains(errStr, "no such file") {
+		return true
+	}
+	// Only treat 550 as not-found if it doesn't look like a permission error
+	if strings.Contains(errStr, "550") && !strings.Contains(errStr, "permission") {
+		return true
+	}
+	return false
 }
 
 func isFTPPermissionDenied(err error) bool {
-	if err == nil {
+	if nil == err {
 		return false
 	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "550") || // Permission denied often uses 550
-		strings.Contains(errStr, "553") || // File name not allowed
-		strings.Contains(errStr, "permission denied")
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "553") ||
+		strings.Contains(errStr, "permission denied") ||
+		strings.Contains(errStr, "permission")
 }
 
 func clampUint64ToInt64(v uint64) int64 {

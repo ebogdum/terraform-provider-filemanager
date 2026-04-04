@@ -63,11 +63,16 @@ func attrValueToGo(ctx context.Context, val attr.Value) (any, error) {
 
 func numberValueToGo(v basetypes.NumberValue) any {
 	bf := v.ValueBigFloat()
-	if bf == nil {
+	if nil == bf {
 		return nil
 	}
 	if bf.IsInt() {
-		i, _ := bf.Int64()
+		i, accuracy := bf.Int64()
+		if accuracy != big.Exact {
+			// Value doesn't fit in int64; return as float64 instead
+			f, _ := bf.Float64()
+			return f
+		}
 		return i
 	}
 	f, _ := bf.Float64()

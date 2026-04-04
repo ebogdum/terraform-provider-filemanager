@@ -247,6 +247,18 @@ func (r *SyncResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
+	// Count files in destination for drift detection
+	dstFiles, listErr := backend.List(ctx, data.DestinationPath.ValueString(), plugin.ListOptions{Recursive: true})
+	if listErr == nil {
+		fileCount := 0
+		for _, e := range dstFiles {
+			if !e.IsDir {
+				fileCount++
+			}
+		}
+		data.FilesTransferred = types.Int64Value(int64(fileCount))
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -447,7 +459,7 @@ func (r *SyncResource) transferFile(ctx context.Context, srcBackend plugin.Backe
 		return 0, fmt.Errorf("failed to write destination: %w", err)
 	}
 
-	return cr.Count, nil
+	return cr.Count(), nil
 }
 
 // getBackend returns the appropriate backend.

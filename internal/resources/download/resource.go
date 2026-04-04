@@ -416,9 +416,15 @@ func (r *DownloadResource) performDownload(ctx context.Context, data *DownloadRe
 			// Calculate relative path
 			relPath := file.Name
 
+			// Validate path safety
+			cleanRel := filepath.Clean(relPath)
+			if filepath.IsAbs(cleanRel) || strings.HasPrefix(cleanRel, "..") {
+				return nil, fmt.Errorf("backend returned unsafe path: %s", relPath)
+			}
+
 			// Download file
 			srcPath := file.Path
-			dstPath := filepath.Join(data.DestinationPath.ValueString(), relPath)
+			dstPath := filepath.Join(data.DestinationPath.ValueString(), cleanRel)
 
 			bytes, err := r.downloadFile(ctx, srcBackend, srcPath, dstBackend, dstPath, fileMode, dirMode)
 			if err != nil {
@@ -477,7 +483,7 @@ func (r *DownloadResource) downloadFile(ctx context.Context, srcBackend plugin.B
 		return 0, fmt.Errorf("failed to write destination: %w", err)
 	}
 
-	return cr.Count, nil
+	return cr.Count(), nil
 }
 
 // calculateFileChecksums calculates checksums for a downloaded file.

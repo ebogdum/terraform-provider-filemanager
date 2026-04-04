@@ -10,12 +10,17 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/user"
 	"strconv"
 	"strings"
 	"text/template"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -117,7 +122,6 @@ The following functions are available in templates:
 - ` + "`contains`" + `, ` + "`hasPrefix`" + `, ` + "`hasSuffix`" + ` - String matching
 - ` + "`default`" + ` - Default value if empty
 - ` + "`indent`" + ` - Indent text
-- ` + "`env`" + ` - Read environment variable
 `,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -168,6 +172,7 @@ The following functions are available in templates:
 			"vars": schema.MapAttribute{
 				Description: "Variables to substitute in the template.",
 				Optional:    true,
+				Sensitive:   true,
 				ElementType: types.StringType,
 			},
 			"engine": schema.StringAttribute{
@@ -251,6 +256,7 @@ The following functions are available in templates:
 			"rendered_content": schema.StringAttribute{
 				Description: "The rendered template content.",
 				Computed:    true,
+				Sensitive:   true,
 			},
 			"size": schema.Int64Attribute{
 				Description: "Size of the rendered file in bytes.",
@@ -625,10 +631,9 @@ func (r *TemplateFileResource) renderGoTemplate(templateContent string, vars map
 	return buf.String(), nil
 }
 
-// renderMustacheTemplate renders a Mustache template.
+// renderMustacheTemplate renders a simple mustache-like template using string replacement.
+// This does NOT implement full Mustache (no sections, partials, or escaping).
 func (r *TemplateFileResource) renderMustacheTemplate(templateContent string, vars map[string]string) (string, error) {
-	// Simple mustache-like variable substitution
-	// For full mustache support, we'd need a proper mustache library
 	result := templateContent
 	for key, value := range vars {
 		// Replace {{{key}}} first (unescaped) - must be before {{key}} to avoid partial matches
@@ -648,7 +653,7 @@ func templateFuncs() template.FuncMap {
 		// String case functions
 		"upper": strings.ToUpper,
 		"lower": strings.ToLower,
-		"title": strings.Title,
+		"title": cases.Title(language.Und).String,
 
 		// String trimming
 		"trim": strings.TrimSpace,
@@ -701,8 +706,8 @@ func templateFuncs() template.FuncMap {
 			return strings.Join(lines, "\n")
 		},
 
-		// Environment variable
-		"env": os.Getenv,
+		// env is intentionally omitted — exposing host environment to templates
+		// is a security risk. Pass values explicitly via the vars attribute.
 
 		// Quote string
 		"quote": func(s string) string {
@@ -714,9 +719,13 @@ func templateFuncs() template.FuncMap {
 			return base64Encode(s)
 		},
 
-		// JSON encoding (simple)
+		// JSON encoding
 		"toJSON": func(v any) string {
-			return fmt.Sprintf("%v", v)
+			b, err := json.Marshal(v)
+			if nil != err {
+				return fmt.Sprintf("%v", v)
+			}
+			return string(b)
 		},
 
 		// Coalesce - return first non-empty value
@@ -743,9 +752,12 @@ func templateFuncs() template.FuncMap {
 			return s == "true" || s == "yes" || s == "1" || s == "on"
 		},
 
-		// Integer conversion
+		// Integer conversion — returns 0 and logs on parse failure
 		"toInt": func(s string) int {
-			i, _ := strconv.Atoi(s)
+			i, err := strconv.Atoi(s)
+			if nil != err {
+				log.Printf("[WARN] template_file: toInt failed to parse %q, returning 0", s)
+			}
 			return i
 		},
 	}

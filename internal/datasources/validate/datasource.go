@@ -138,6 +138,7 @@ func (d *ValidateDataSource) Schema(ctx context.Context, req datasource.SchemaRe
 			"content": schema.StringAttribute{
 				Description: "Raw file content.",
 				Computed:    true,
+				Sensitive:   true,
 			},
 		},
 	}

@@ -313,12 +313,42 @@ func (r *AzureOperationResource) Delete(ctx context.Context, req resource.Delete
 
 	// For operations, delete is mostly a no-op.
 	// However, if we acquired a lease, we should release it.
-	if data.Operation.ValueString() == "acquire_lease" && !data.LeaseID.IsNull() {
+	if data.Operation.ValueString() == "acquire_lease" && !data.LeaseID.IsNull() && data.LeaseID.ValueString() != "" {
 		tflog.Debug(ctx, "Releasing lease on delete", map[string]any{
 			"blob_path": data.BlobPath.ValueString(),
+			"lease_id":  data.LeaseID.ValueString(),
 		})
-		// In a real implementation, we would release the lease here
-		// For now, this is a placeholder
+
+		backend, err := r.getBackend(ctx, data.Service.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Failed to get backend for lease release",
+				fmt.Sprintf("Could not obtain backend to release lease: %s", err),
+			)
+			return
+		}
+
+		azBackend, ok := backend.(azurebackend.AzureBackend)
+		if !ok {
+			resp.Diagnostics.AddError(
+				"Lease Release Not Supported",
+				"The configured backend does not support Azure lease operations. The lease may remain active until it expires. Please release the lease manually.",
+			)
+			return
+		}
+
+		if err := azBackend.ReleaseLease(ctx, data.BlobPath.ValueString(), data.LeaseID.ValueString()); err != nil {
+			resp.Diagnostics.AddError(
+				"Failed to Release Lease",
+				fmt.Sprintf("Could not release lease %s on blob %s: %s. The lease may remain active until it expires.",
+					data.LeaseID.ValueString(), data.BlobPath.ValueString(), err),
+			)
+			return
+		}
+
+		tflog.Info(ctx, "Lease released successfully on delete", map[string]any{
+			"blob_path": data.BlobPath.ValueString(),
+		})
 	}
 
 	// Resource is removed from state automatically
@@ -556,10 +586,7 @@ func (r *AzureOperationResource) refreshBlobProperties(ctx context.Context, data
 		if err == plugin.ErrPathNotFound {
 			return plugin.ErrPathNotFound
 		}
-		tflog.Debug(ctx, "Using mock data for blob properties", map[string]any{
-			"error": err.Error(),
-		})
-		return r.setMockComputedValues(ctx, data)
+		return fmt.Errorf("failed to stat blob: %w", err)
 	}
 
 	// Set values from the actual file info
@@ -633,69 +660,6 @@ func (r *AzureOperationResource) refreshFromAzureBackend(ctx context.Context, az
 	data.ServerEncrypted = types.BoolValue(info.ServerEncrypted)
 	data.ArchiveStatus = types.StringValue(info.ArchiveStatus)
 	data.IsCurrentVersion = types.BoolValue(true)
-
-	return nil
-}
-
-// setMockComputedValues sets mock computed values for placeholder implementation.
-func (r *AzureOperationResource) setMockComputedValues(ctx context.Context, data *AzureOperationResourceModel) error {
-	now := time.Now()
-
-	// Set mock values for computed attributes
-	if data.ETag.IsNull() {
-		data.ETag = types.StringValue(fmt.Sprintf("\"0x%X\"", now.UnixNano()))
-	}
-	if data.ContentType.IsNull() {
-		data.ContentType = types.StringValue("application/octet-stream")
-	}
-	if data.ContentMD5.IsNull() {
-		data.ContentMD5 = types.StringValue("d41d8cd98f00b204e9800998ecf8427e")
-	}
-	if data.BlobType.IsNull() {
-		data.BlobType = types.StringValue("BlockBlob")
-	}
-	if data.CurrentAccessTier.IsNull() {
-		if !data.AccessTier.IsNull() {
-			data.CurrentAccessTier = data.AccessTier
-		} else {
-			data.CurrentAccessTier = types.StringValue("Hot")
-		}
-	}
-	if data.LeaseStatus.IsNull() {
-		data.LeaseStatus = types.StringValue("unlocked")
-	}
-	if data.CreationTime.IsNull() {
-		data.CreationTime = types.StringValue(now.Add(-24 * time.Hour).Format(time.RFC3339))
-	}
-	if data.LastModified.IsNull() {
-		data.LastModified = types.StringValue(now.Format(time.RFC3339))
-	}
-	if data.VersionID.IsNull() {
-		data.VersionID = types.StringNull()
-	}
-	if data.IsCurrentVersion.IsNull() {
-		data.IsCurrentVersion = types.BoolValue(true)
-	}
-	if data.ServerEncrypted.IsNull() {
-		data.ServerEncrypted = types.BoolValue(true)
-	}
-	if data.ArchiveStatus.IsNull() {
-		data.ArchiveStatus = types.StringNull()
-	}
-
-	// Handle current metadata - copy from input if set
-	if !data.Metadata.IsNull() {
-		data.CurrentMetadata = data.Metadata
-	} else if data.CurrentMetadata.IsNull() {
-		data.CurrentMetadata = types.MapNull(types.StringType)
-	}
-
-	// Handle current tags - copy from input if set
-	if !data.Tags.IsNull() {
-		data.CurrentTags = data.Tags
-	} else if data.CurrentTags.IsNull() {
-		data.CurrentTags = types.MapNull(types.StringType)
-	}
 
 	return nil
 }

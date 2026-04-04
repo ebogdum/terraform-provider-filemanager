@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -258,17 +259,14 @@ func (r *ArchiveResource) Read(ctx context.Context, req resource.ReadRequest, re
 
 	data.Size = types.Int64Value(info.Size())
 
-	// Calculate checksums
-	content, err := os.ReadFile(data.Path.ValueString())
+	// Calculate checksum by streaming (avoids loading entire archive into memory)
+	data.MD5 = types.StringNull()
+	checksum, err := streamSHA256(data.Path.ValueString())
 	if err != nil {
-		resp.Diagnostics.AddError("Failed to read archive", err.Error())
+		resp.Diagnostics.AddError("Failed to calculate archive checksum", err.Error())
 		return
 	}
-
-	data.MD5 = types.StringNull()
-
-	sha256sum := sha256.Sum256(content)
-	data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))
+	data.SHA256 = types.StringValue(checksum)
 
 	// Compute path outputs
 	pathOutputs := common.ComputePathOutputs(data.Path.ValueString())
@@ -438,9 +436,13 @@ func (r *ArchiveResource) createZipArchive(w io.Writer, files []string, data *Ar
 		archivePath := file
 		if sourceDir != "" {
 			relPath, err := filepath.Rel(sourceDir, file)
-			if err == nil {
-				archivePath = relPath
+			if err != nil {
+				return count, fmt.Errorf("failed to compute relative path: %w", err)
 			}
+			if strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
+				return count, fmt.Errorf("archive entry path %q escapes source directory", relPath)
+			}
+			archivePath = relPath
 		} else {
 			archivePath = filepath.Base(file)
 		}
@@ -485,9 +487,13 @@ func (r *ArchiveResource) createTarArchive(w io.Writer, files []string, data *Ar
 		archivePath := file
 		if sourceDir != "" {
 			relPath, err := filepath.Rel(sourceDir, file)
-			if err == nil {
-				archivePath = relPath
+			if err != nil {
+				return count, fmt.Errorf("failed to compute relative path: %w", err)
 			}
+			if strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
+				return count, fmt.Errorf("archive entry path %q escapes source directory", relPath)
+			}
+			archivePath = relPath
 		} else {
 			archivePath = filepath.Base(file)
 		}
@@ -539,13 +545,11 @@ func (r *ArchiveResource) updateComputedValues(data *ArchiveResourceModel, fileC
 		data.Size = types.Int64Value(info.Size())
 	}
 
-	// Calculate checksums
-	content, err := os.ReadFile(data.Path.ValueString())
-	if err == nil {
-		data.MD5 = types.StringNull()
-
-		sha256sum := sha256.Sum256(content)
-		data.SHA256 = types.StringValue(hex.EncodeToString(sha256sum[:]))
+	// Calculate checksum by streaming
+	data.MD5 = types.StringNull()
+	checksum, err := streamSHA256(data.Path.ValueString())
+	if nil == err {
+		data.SHA256 = types.StringValue(checksum)
 	}
 
 	// Compute path outputs
@@ -554,4 +558,19 @@ func (r *ArchiveResource) updateComputedValues(data *ArchiveResourceModel, fileC
 	data.Filename = pathOutputs.Filename
 	data.Extension = pathOutputs.Extension
 	data.AbsolutePath = pathOutputs.AbsolutePath
+}
+
+// streamSHA256 computes the SHA-256 checksum of a file without loading it entirely into memory.
+func streamSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if nil != err {
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); nil != err {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

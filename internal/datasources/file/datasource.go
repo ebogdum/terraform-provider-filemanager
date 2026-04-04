@@ -19,6 +19,9 @@ import (
 	"github.com/ebogdum/filemanager/internal/plugin"
 )
 
+// maxReadBytes is the maximum file size (10 MB) that can be read by this datasource.
+const maxReadBytes = 10 * 1024 * 1024
+
 // Ensure provider defined types fully satisfy framework interfaces.
 var _ datasource.DataSource = &FileDataSource{}
 
@@ -177,9 +180,15 @@ func (d *FileDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		}
 		defer reader.Close()
 
-		content, err := io.ReadAll(reader)
+		limited := io.LimitReader(reader, maxReadBytes+1)
+		content, err := io.ReadAll(limited)
 		if err != nil {
 			resp.Diagnostics.AddError("Failed to read file content", err.Error())
+			return
+		}
+		if int64(len(content)) > maxReadBytes {
+			resp.Diagnostics.AddError("File too large",
+				fmt.Sprintf("File exceeds maximum read size of %d bytes", maxReadBytes))
 			return
 		}
 

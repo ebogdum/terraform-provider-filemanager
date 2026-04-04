@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -576,7 +577,7 @@ func (r *FileResource) ImportState(ctx context.Context, req resource.ImportState
 // getContent retrieves the content to write from the appropriate source.
 func (r *FileResource) getContent(ctx context.Context, data *FileResourceModel) ([]byte, error) {
 	// Check content sources in priority order
-	if !data.Content.IsNull() && data.Content.ValueString() != "" {
+	if !data.Content.IsNull() {
 		return []byte(data.Content.ValueString()), nil
 	}
 
@@ -589,6 +590,16 @@ func (r *FileResource) getContent(ctx context.Context, data *FileResourceModel) 
 	}
 
 	if !data.Source.IsNull() && data.Source.ValueString() != "" {
+		// Validate that source path doesn't escape base path when configured
+		if r.config != nil && r.config.BasePath != "" {
+			absSource, absErr := filepath.Abs(data.Source.ValueString())
+			if absErr != nil {
+				return nil, fmt.Errorf("failed to resolve source path: %w", absErr)
+			}
+			if !strings.HasPrefix(absSource+string(filepath.Separator), r.config.BasePath+string(filepath.Separator)) && absSource != r.config.BasePath {
+				return nil, fmt.Errorf("source path %q escapes base path %q", data.Source.ValueString(), r.config.BasePath)
+			}
+		}
 		content, err := os.ReadFile(data.Source.ValueString())
 		if err != nil {
 			return nil, fmt.Errorf("failed to read source file: %w", err)

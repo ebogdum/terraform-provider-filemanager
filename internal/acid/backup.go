@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -49,9 +50,19 @@ func (b *FileBackup) Create(ctx context.Context, path string, opts BackupOptions
 	// Determine backup path
 	backupPath := b.generateBackupPath(absPath, opts)
 
+	// Validate that backup path doesn't escape source directory via traversal
+	absBackupPath, err := filepath.Abs(backupPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve backup path: %w", err)
+	}
+	if strings.Contains(filepath.Clean(absBackupPath), "..") {
+		return "", fmt.Errorf("backup path contains directory traversal: %s", absBackupPath)
+	}
+	backupPath = absBackupPath
+
 	// Create backup directory if needed
 	backupDir := filepath.Dir(backupPath)
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
+	if err := os.MkdirAll(backupDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
@@ -73,7 +84,6 @@ func (b *FileBackup) Create(ctx context.Context, path string, opts BackupOptions
 		defer dstFile.Close()
 
 		gzWriter := gzip.NewWriter(dstFile)
-		defer gzWriter.Close()
 
 		if _, err := io.Copy(gzWriter, srcFile); err != nil {
 			os.Remove(backupPath)
@@ -103,9 +113,8 @@ func (b *FileBackup) Create(ctx context.Context, path string, opts BackupOptions
 
 	// Clean up old backups if needed
 	if opts.MaxBackups > 0 {
-		if err := b.Cleanup(ctx, absPath, opts.MaxBackups); err != nil {
-			// Non-fatal, just log
-			_ = err
+		if cleanupErr := b.Cleanup(ctx, absPath, opts.MaxBackups); cleanupErr != nil {
+			log.Printf("[WARN] failed to clean up old backups for %s: %v", absPath, cleanupErr)
 		}
 	}
 

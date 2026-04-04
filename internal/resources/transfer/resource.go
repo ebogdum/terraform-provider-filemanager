@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -359,7 +360,17 @@ func (r *TransferResource) Delete(ctx context.Context, req resource.DeleteReques
 
 // ImportState imports an existing resource.
 func (r *TransferResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	// Parse composite ID format: "backend:path"
+	parts := strings.SplitN(req.ID, ":", 2)
+	if len(parts) != 2 {
+		resp.Diagnostics.AddError(
+			"Invalid Import ID",
+			fmt.Sprintf("Expected format 'backend:path', got: %s", req.ID),
+		)
+		return
+	}
+	resp.State.SetAttribute(ctx, path.Root("destination_backend"), parts[0])
+	resp.State.SetAttribute(ctx, path.Root("destination_path"), parts[1])
 }
 
 // transferResult holds the result of a transfer operation.
@@ -432,9 +443,15 @@ func (r *TransferResource) performTransfer(ctx context.Context, data *TransferRe
 			// Calculate relative path
 			relPath := file.Name
 
+			// Validate path safety
+			cleanRel := filepath.Clean(relPath)
+			if filepath.IsAbs(cleanRel) || strings.HasPrefix(cleanRel, "..") {
+				return nil, fmt.Errorf("backend returned unsafe path: %s", relPath)
+			}
+
 			// Transfer file
 			srcPath := file.Path
-			dstPath := filepath.Join(data.DestinationPath.ValueString(), relPath)
+			dstPath := filepath.Join(data.DestinationPath.ValueString(), cleanRel)
 
 			bytes, method, err := r.transferFile(ctx, srcBackend, srcPath, dstBackend, dstPath, opts, data.Overwrite.ValueBool())
 			if err != nil {
@@ -462,6 +479,11 @@ func (r *TransferResource) performTransfer(ctx context.Context, data *TransferRe
 	}
 
 	result.duration = time.Since(start)
+
+	if result.filesFailed > 0 {
+		return result, fmt.Errorf("%d of %d files failed to transfer", result.filesFailed, result.filesTransferred+result.filesFailed)
+	}
+
 	return result, nil
 }
 
@@ -516,7 +538,7 @@ func (r *TransferResource) transferFile(ctx context.Context, srcBackend plugin.B
 		method = plugin.TransferMethodStreamingBuffer
 	}
 
-	return cr.Count, method, nil
+	return cr.Count(), method, nil
 }
 
 // getBackend returns the appropriate backend.

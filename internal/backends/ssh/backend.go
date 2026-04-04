@@ -7,8 +7,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,13 +22,14 @@ import (
 
 // Backend implements the SSH/SFTP backend for remote file operations.
 type Backend struct {
-	config     plugin.BackendConfig
-	connected  bool
-	basePath   string
-	sshClient  *ssh.Client
-	sftpClient *sftp.Client
-	pool       *ConnectionPool
-	mu         sync.RWMutex
+	config      plugin.BackendConfig
+	connected   bool
+	basePath    string
+	sshClient   *ssh.Client
+	sftpClient  *sftp.Client
+	pool        *ConnectionPool
+	agentCloser io.Closer // SSH agent connection; closed on backend Close
+	mu          sync.RWMutex
 }
 
 // New creates a new SSH backend.
@@ -73,18 +76,18 @@ func (b *Backend) Connect(ctx context.Context, config plugin.BackendConfig) erro
 
 	// Determine host and port
 	host := config.Host
-	if host == "" {
+	if "" == host {
 		return fmt.Errorf("SSH host is required")
 	}
 	port := config.Port
-	if port == 0 {
+	if 0 == port {
 		port = 22
 	}
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 
 	// Set connection timeout
 	timeout := config.Timeout
-	if timeout == 0 {
+	if 0 == timeout {
 		timeout = 30 * time.Second
 	}
 	sshConfig.Timeout = timeout
@@ -114,7 +117,12 @@ func (b *Backend) buildSSHConfig(config plugin.BackendConfig) (*ssh.ClientConfig
 
 	// Try private key authentication first
 	if len(config.PrivateKey) > 0 {
-		signer, err := ParsePrivateKey(config.PrivateKey, config.Password)
+		// Prefer dedicated passphrase from Extra map over the Password field
+		passphrase := config.Password
+		if pp, ok := config.Extra["passphrase"].(string); ok && "" != pp {
+			passphrase = pp
+		}
+		signer, err := ParsePrivateKey(config.PrivateKey, passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse private key: %w", err)
 		}
@@ -122,23 +130,24 @@ func (b *Backend) buildSSHConfig(config plugin.BackendConfig) (*ssh.ClientConfig
 	}
 
 	// Password authentication
-	if config.Password != "" && len(config.PrivateKey) == 0 {
+	if "" != config.Password && 0 == len(config.PrivateKey) {
 		authMethods = append(authMethods, ssh.Password(config.Password))
 	}
 
 	// Try SSH agent if available and no other auth methods
-	if len(authMethods) == 0 {
-		if agentAuth, err := SSHAgentAuth(); err == nil {
+	if 0 == len(authMethods) {
+		if agentAuth, agentConn, err := SSHAgentAuth(); nil == err {
 			authMethods = append(authMethods, agentAuth)
+			b.agentCloser = agentConn
 		}
 	}
 
-	if len(authMethods) == 0 {
+	if 0 == len(authMethods) {
 		return nil, fmt.Errorf("no authentication method available")
 	}
 
 	username := config.Username
-	if username == "" {
+	if "" == username {
 		return nil, fmt.Errorf("SSH username is required")
 	}
 
@@ -165,19 +174,19 @@ func (b *Backend) buildHostKeyCallback(config plugin.BackendConfig) (ssh.HostKey
 	}
 
 	// Check for explicit host key
-	if hostKey, ok := config.Extra["host_key"].(string); ok && hostKey != "" {
+	if hostKey, ok := config.Extra["host_key"].(string); ok && "" != hostKey {
 		return HostKeyCallbackFromString(hostKey)
 	}
 
 	// Check for known_hosts file path
-	if knownHostsPath, ok := config.Extra["known_hosts_file"].(string); ok && knownHostsPath != "" {
+	if knownHostsPath, ok := config.Extra["known_hosts_file"].(string); ok && "" != knownHostsPath {
 		return LoadKnownHostsFile(knownHostsPath)
 	}
 
 	// If TLS CA data provided (for known hosts data)
 	if len(config.TLSCA) > 0 {
 		callback, err := ParseKnownHosts(config.TLSCA)
-		if err == nil {
+		if nil == err {
 			return callback, nil
 		}
 		// Fall through to default if parsing fails
@@ -198,18 +207,25 @@ func (b *Backend) Close() error {
 
 	var errs []error
 
-	if b.sftpClient != nil {
-		if err := b.sftpClient.Close(); err != nil {
+	if nil != b.sftpClient {
+		if err := b.sftpClient.Close(); nil != err {
 			errs = append(errs, err)
 		}
 		b.sftpClient = nil
 	}
 
-	if b.sshClient != nil {
-		if err := b.sshClient.Close(); err != nil {
+	if nil != b.sshClient {
+		if err := b.sshClient.Close(); nil != err {
 			errs = append(errs, err)
 		}
 		b.sshClient = nil
+	}
+
+	if nil != b.agentCloser {
+		if err := b.agentCloser.Close(); nil != err {
+			errs = append(errs, err)
+		}
+		b.agentCloser = nil
 	}
 
 	b.connected = false
@@ -235,21 +251,26 @@ func (b *Backend) Ping(ctx context.Context) error {
 }
 
 // resolvePath resolves a relative path against the base path.
-func (b *Backend) resolvePath(p string) string {
-	// Clean the path using POSIX path semantics
+func (b *Backend) resolvePath(p string) (string, error) {
 	p = path.Clean(p)
 
-	// If absolute path, use as-is
+	var resolved string
 	if path.IsAbs(p) {
-		return p
+		resolved = p
+	} else if "" != b.basePath {
+		resolved = path.Join(b.basePath, p)
+	} else {
+		return p, nil
 	}
 
-	// Join with base path
-	if b.basePath != "" {
-		return path.Join(b.basePath, p)
+	// Enforce basePath containment
+	if "" != b.basePath {
+		if resolved != b.basePath && !strings.HasPrefix(resolved+"/", b.basePath+"/") {
+			return "", fmt.Errorf("path %q escapes base path %q", p, b.basePath)
+		}
 	}
 
-	return p
+	return resolved, nil
 }
 
 // Read reads a file and returns an io.ReadCloser.
@@ -261,10 +282,13 @@ func (b *Backend) Read(ctx context.Context, filePath string) (io.ReadCloser, err
 		return nil, plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if nil != err {
+		return nil, err
+	}
 
 	file, err := b.sftpClient.Open(absPath)
-	if err != nil {
+	if nil != err {
 		if os.IsNotExist(err) {
 			return nil, plugin.ErrPathNotFound
 		}
@@ -286,11 +310,14 @@ func (b *Backend) Write(ctx context.Context, filePath string, r io.Reader, opts 
 		return plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if nil != err {
+		return err
+	}
 
 	// Check if file exists and we're not overwriting
 	if !opts.Overwrite {
-		if _, err := b.sftpClient.Stat(absPath); err == nil {
+		if _, err := b.sftpClient.Stat(absPath); nil == err {
 			return plugin.ErrPathExists
 		}
 	}
@@ -299,31 +326,31 @@ func (b *Backend) Write(ctx context.Context, filePath string, r io.Reader, opts 
 	if opts.CreateDirs {
 		dir := path.Dir(absPath)
 		// Note: SFTP MkdirAll doesn't support custom directory modes
-		if err := b.sftpClient.MkdirAll(dir); err != nil {
+		if err := b.sftpClient.MkdirAll(dir); nil != err {
 			return fmt.Errorf("failed to create directories: %w", err)
 		}
 	}
 
 	// Determine file mode
 	mode := opts.Mode
-	if mode == 0 {
+	if 0 == mode {
 		mode = 0644
 	}
 
 	// Open file for writing
 	file, err := b.sftpClient.OpenFile(absPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
-	if err != nil {
+	if nil != err {
 		return err
 	}
 	defer file.Close()
 
 	// Copy content
-	if _, err := io.Copy(file, r); err != nil {
+	if _, err := io.Copy(file, r); nil != err {
 		return err
 	}
 
 	// Set permissions
-	if err := b.sftpClient.Chmod(absPath, mode); err != nil {
+	if err := b.sftpClient.Chmod(absPath, mode); nil != err {
 		// Non-fatal, some servers may not support this
 		_ = err
 	}
@@ -340,10 +367,13 @@ func (b *Backend) Delete(ctx context.Context, filePath string) error {
 		return plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if nil != err {
+		return err
+	}
 
 	info, err := b.sftpClient.Stat(absPath)
-	if err != nil {
+	if nil != err {
 		if os.IsNotExist(err) {
 			return plugin.ErrPathNotFound
 		}
@@ -354,7 +384,7 @@ func (b *Backend) Delete(ctx context.Context, filePath string) error {
 		return plugin.ErrNotAFile
 	}
 
-	if err := b.sftpClient.Remove(absPath); err != nil {
+	if err := b.sftpClient.Remove(absPath); nil != err {
 		if os.IsPermission(err) {
 			return plugin.ErrPermissionDenied
 		}
@@ -373,10 +403,13 @@ func (b *Backend) Exists(ctx context.Context, filePath string) (bool, error) {
 		return false, plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if nil != err {
+		return false, err
+	}
 
-	_, err := b.sftpClient.Stat(absPath)
-	if err != nil {
+	_, err = b.sftpClient.Stat(absPath)
+	if nil != err {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
@@ -395,10 +428,13 @@ func (b *Backend) Stat(ctx context.Context, filePath string) (*plugin.FileInfo, 
 		return nil, plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if nil != err {
+		return nil, err
+	}
 
 	info, err := b.sftpClient.Lstat(absPath)
-	if err != nil {
+	if nil != err {
 		if os.IsNotExist(err) {
 			return nil, plugin.ErrPathNotFound
 		}
@@ -418,13 +454,13 @@ func (b *Backend) Stat(ctx context.Context, filePath string) (*plugin.FileInfo, 
 	if info.Mode()&os.ModeSymlink != 0 {
 		fileInfo.IsSymlink = true
 		target, err := b.sftpClient.ReadLink(absPath)
-		if err == nil {
+		if nil == err {
 			fileInfo.LinkTarget = target
 		}
 	}
 
 	// Try to get Unix-specific info from Sys()
-	if sys := info.Sys(); sys != nil {
+	if sys := info.Sys(); nil != sys {
 		if stat, ok := sys.(*sftp.FileStat); ok {
 			fileInfo.UID = int(stat.UID)
 			fileInfo.GID = int(stat.GID)
@@ -443,10 +479,13 @@ func (b *Backend) List(ctx context.Context, dirPath string, opts plugin.ListOpti
 		return nil, plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(dirPath)
+	absPath, err := b.resolvePath(dirPath)
+	if nil != err {
+		return nil, err
+	}
 
 	info, err := b.sftpClient.Stat(absPath)
-	if err != nil {
+	if nil != err {
 		if os.IsNotExist(err) {
 			return nil, plugin.ErrPathNotFound
 		}
@@ -468,7 +507,7 @@ func (b *Backend) listRecursive(absPath string, opts plugin.ListOptions) ([]plug
 	results := make([]plugin.FileInfo, 0)
 	walker := b.sftpClient.Walk(absPath)
 	for walker.Step() {
-		if err := walker.Err(); err != nil {
+		if err := walker.Err(); nil != err {
 			continue
 		}
 
@@ -493,7 +532,7 @@ func (b *Backend) listRecursive(absPath string, opts plugin.ListOptions) ([]plug
 
 func (b *Backend) listShallow(absPath string, opts plugin.ListOptions) ([]plugin.FileInfo, error) {
 	entries, err := b.sftpClient.ReadDir(absPath)
-	if err != nil {
+	if nil != err {
 		return nil, err
 	}
 
@@ -522,11 +561,11 @@ func shouldSkipSSHHidden(name string, includeHidden bool) bool {
 }
 
 func matchesSSHPattern(name, pattern string) bool {
-	if pattern == "" {
+	if "" == pattern {
 		return true
 	}
 	matched, err := path.Match(pattern, name)
-	return err == nil && matched
+	return nil == err && matched
 }
 
 func toSSHFileInfo(filePath string, info os.FileInfo) plugin.FileInfo {
@@ -538,7 +577,7 @@ func toSSHFileInfo(filePath string, info os.FileInfo) plugin.FileInfo {
 		ModTime: info.ModTime(),
 		IsDir:   info.IsDir(),
 	}
-	if sys := info.Sys(); sys != nil {
+	if sys := info.Sys(); nil != sys {
 		if stat, ok := sys.(*sftp.FileStat); ok {
 			fileInfo.UID = int(stat.UID)
 			fileInfo.GID = int(stat.GID)
@@ -556,10 +595,13 @@ func (b *Backend) Mkdir(ctx context.Context, dirPath string, opts plugin.MkdirOp
 		return plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(dirPath)
+	absPath, err := b.resolvePath(dirPath)
+	if nil != err {
+		return err
+	}
 
 	mode := opts.Mode
-	if mode == 0 {
+	if 0 == mode {
 		mode = 0755
 	}
 
@@ -567,7 +609,7 @@ func (b *Backend) Mkdir(ctx context.Context, dirPath string, opts plugin.MkdirOp
 		return b.sftpClient.MkdirAll(absPath)
 	}
 
-	if err := b.sftpClient.Mkdir(absPath); err != nil {
+	if err := b.sftpClient.Mkdir(absPath); nil != err {
 		if os.IsExist(err) {
 			return plugin.ErrPathExists
 		}
@@ -592,10 +634,13 @@ func (b *Backend) Rmdir(ctx context.Context, dirPath string, recursive bool) err
 		return plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(dirPath)
+	absPath, err := b.resolvePath(dirPath)
+	if nil != err {
+		return err
+	}
 
 	info, err := b.sftpClient.Stat(absPath)
-	if err != nil {
+	if nil != err {
 		if os.IsNotExist(err) {
 			return plugin.ErrPathNotFound
 		}
@@ -610,7 +655,7 @@ func (b *Backend) Rmdir(ctx context.Context, dirPath string, recursive bool) err
 		return b.removeAllRecursive(absPath)
 	}
 
-	if err := b.sftpClient.RemoveDirectory(absPath); err != nil {
+	if err := b.sftpClient.RemoveDirectory(absPath); nil != err {
 		if strings.Contains(err.Error(), "not empty") ||
 			strings.Contains(err.Error(), "directory not empty") {
 			return plugin.ErrDirNotEmpty
@@ -621,21 +666,38 @@ func (b *Backend) Rmdir(ctx context.Context, dirPath string, recursive bool) err
 	return nil
 }
 
+const maxRemoveDepth = 100
+
 // removeAllRecursive removes a directory and all its contents.
-func (b *Backend) removeAllRecursive(dirPath string) error {
+func (b *Backend) removeAllRecursive(dirPath string, depth ...int) error {
+	currentDepth := 0
+	if len(depth) > 0 {
+		currentDepth = depth[0]
+	}
+	if currentDepth > maxRemoveDepth {
+		return fmt.Errorf("directory recursion depth exceeds maximum of %d", maxRemoveDepth)
+	}
+
 	entries, err := b.sftpClient.ReadDir(dirPath)
-	if err != nil {
+	if nil != err {
 		return err
 	}
 
 	for _, entry := range entries {
 		entryPath := path.Join(dirPath, entry.Name())
+		// Skip symlinks to avoid following them into loops or outside the tree
+		if entry.Mode()&os.ModeSymlink != 0 {
+			if err := b.sftpClient.Remove(entryPath); nil != err {
+				return err
+			}
+			continue
+		}
 		if entry.IsDir() {
-			if err := b.removeAllRecursive(entryPath); err != nil {
+			if err := b.removeAllRecursive(entryPath, currentDepth+1); nil != err {
 				return err
 			}
 		} else {
-			if err := b.sftpClient.Remove(entryPath); err != nil {
+			if err := b.sftpClient.Remove(entryPath); nil != err {
 				return err
 			}
 		}
@@ -661,7 +723,10 @@ func (b *Backend) Symlink(ctx context.Context, target, link string) error {
 		return plugin.ErrNotConnected
 	}
 
-	absLink := b.resolvePath(link)
+	absLink, err := b.resolvePath(link)
+	if nil != err {
+		return err
+	}
 
 	return b.sftpClient.Symlink(target, absLink)
 }
@@ -675,7 +740,10 @@ func (b *Backend) Chmod(ctx context.Context, filePath string, mode os.FileMode) 
 		return plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if nil != err {
+		return err
+	}
 
 	return b.sftpClient.Chmod(absPath, mode)
 }
@@ -689,7 +757,10 @@ func (b *Backend) Chown(ctx context.Context, filePath string, uid, gid int) erro
 		return plugin.ErrNotConnected
 	}
 
-	absPath := b.resolvePath(filePath)
+	absPath, err := b.resolvePath(filePath)
+	if nil != err {
+		return err
+	}
 
 	return b.sftpClient.Chown(absPath, uid, gid)
 }
@@ -740,6 +811,8 @@ func (b *Backend) Capabilities() plugin.BackendCapabilities {
 
 // Execute runs a command on the remote system and returns the output.
 // This implements the plugin.CommandExecutor interface.
+// Commands containing shell metacharacters are rejected to prevent injection.
+// Only simple commands without piping, chaining, or variable expansion are allowed.
 func (b *Backend) Execute(ctx context.Context, command string) ([]byte, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -748,18 +821,35 @@ func (b *Backend) Execute(ctx context.Context, command string) ([]byte, error) {
 		return nil, plugin.ErrNotConnected
 	}
 
+	// Reject commands with shell metacharacters to prevent injection
+	if containsShellMetachars(command) {
+		return nil, fmt.Errorf("command contains disallowed shell metacharacters")
+	}
+
 	session, err := b.sshClient.NewSession()
-	if err != nil {
+	if nil != err {
 		return nil, fmt.Errorf("failed to create SSH session: %w", err)
 	}
 	defer session.Close()
 
 	output, err := session.CombinedOutput(command)
-	if err != nil {
+	if nil != err {
 		return output, fmt.Errorf("command failed: %w", err)
 	}
 
 	return output, nil
+}
+
+// containsShellMetachars returns true if the command string contains any shell
+// metacharacters that could be used for command injection.
+func containsShellMetachars(cmd string) bool {
+	for _, c := range cmd {
+		switch c {
+		case ';', '|', '&', '$', '`', '\n', '\r', '(', ')', '{', '}', '<', '>', '!':
+			return true
+		}
+	}
+	return false
 }
 
 // CopyFile copies a file remotely (SFTP doesn't have native remote copy, so we stream).
@@ -771,12 +861,18 @@ func (b *Backend) CopyFile(ctx context.Context, src, dst string, opts plugin.Wri
 		return plugin.ErrNotConnected
 	}
 
-	absSrc := b.resolvePath(src)
-	absDst := b.resolvePath(dst)
+	absSrc, err := b.resolvePath(src)
+	if nil != err {
+		return err
+	}
+	absDst, err := b.resolvePath(dst)
+	if nil != err {
+		return err
+	}
 
 	// Open source file
 	srcFile, err := b.sftpClient.Open(absSrc)
-	if err != nil {
+	if nil != err {
 		if os.IsNotExist(err) {
 			return plugin.ErrPathNotFound
 		}
@@ -787,16 +883,16 @@ func (b *Backend) CopyFile(ctx context.Context, src, dst string, opts plugin.Wri
 	// Create parent directories if needed
 	if opts.CreateDirs {
 		dir := path.Dir(absDst)
-		if err := b.sftpClient.MkdirAll(dir); err != nil {
+		if err := b.sftpClient.MkdirAll(dir); nil != err {
 			return fmt.Errorf("failed to create directories: %w", err)
 		}
 	}
 
 	// Create destination file
 	mode := opts.Mode
-	if mode == 0 {
+	if 0 == mode {
 		// Try to preserve source mode
-		if srcInfo, err := srcFile.Stat(); err == nil {
+		if srcInfo, err := srcFile.Stat(); nil == err {
 			mode = srcInfo.Mode()
 		} else {
 			mode = 0644
@@ -804,13 +900,13 @@ func (b *Backend) CopyFile(ctx context.Context, src, dst string, opts plugin.Wri
 	}
 
 	dstFile, err := b.sftpClient.OpenFile(absDst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
-	if err != nil {
+	if nil != err {
 		return err
 	}
 	defer dstFile.Close()
 
 	// Copy content
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
+	if _, err := io.Copy(dstFile, srcFile); nil != err {
 		return err
 	}
 

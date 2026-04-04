@@ -64,7 +64,7 @@ Validates file content against expected formats (JSON, YAML, TOML, INI, ENV) and
 
 ### Read-Only
 
-- `content` (String) Raw file content.
+- `content` (String, Sensitive) Raw file content.
 - `error_column` (Number) Column number where the error occurred. Null if valid.
 - `error_context` (String) Lines around the error with line numbers and marker. Null if valid.
 - `error_line` (Number) Line number where the error occurred. Null if valid.

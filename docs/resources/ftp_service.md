@@ -70,7 +70,6 @@ Configures an FTP/FTPS service for remote file operations.
 - `port` (Number) FTP server port. Defaults to 21.
 - `timeout` (String) Connection timeout (e.g., '30s', '1m'). Defaults to 30s.
 - `tls_enabled` (Boolean) Enable TLS/SSL for secure FTP (FTPS).
-- `tls_skip_verify` (Boolean) Skip TLS certificate verification. WARNING: This is insecure and should only be used for testing.
 - `username` (String) FTP username. Defaults to 'anonymous'.
 
 ### Read-Only

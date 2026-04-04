@@ -35,8 +35,13 @@ func (f *Format) MimeTypes() []string {
 	return []string{"application/yaml", "application/x-yaml", "text/yaml", "text/x-yaml"}
 }
 
+const maxYAMLInputBytes = 10 * 1024 * 1024 // 10 MB
+
 // Parse parses YAML data into a Go value.
 func (f *Format) Parse(data []byte) (any, error) {
+	if len(data) > maxYAMLInputBytes {
+		return nil, fmt.Errorf("YAML input exceeds maximum size of %d bytes", maxYAMLInputBytes)
+	}
 	var result any
 	if err := yaml.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("YAML parse error: %w", err)

@@ -469,10 +469,10 @@ func (p *Plugin) writeSingleBlock(w io.Writer, name string, block map[string]any
 
 func (p *Plugin) writeBlockItem(w io.Writer, name string, block map[string]any, indent int, single bool) error {
 	indentStr := strings.Repeat("    ", indent)
-	header := nginxBlockHeader(name, block, single)
+	header, remaining := nginxBlockHeader(name, block, single)
 	fmt.Fprintf(w, "%s%s\n", indentStr, header)
 
-	if err := p.writeConfig(w, block, indent+1); err != nil {
+	if err := p.writeConfig(w, remaining, indent+1); err != nil {
 		return err
 	}
 
@@ -480,39 +480,54 @@ func (p *Plugin) writeBlockItem(w io.Writer, name string, block map[string]any, 
 	return nil
 }
 
-func nginxBlockHeader(name string, block map[string]any, single bool) string {
+func nginxBlockHeader(name string, block map[string]any, single bool) (string, map[string]any) {
+	// Copy to avoid mutating caller's map
+	result := make(map[string]any, len(block))
+	for k, v := range block {
+		result[k] = v
+	}
 	if single {
-		delete(block, "name")
+		delete(result, "name")
 	}
 
 	if name == "location" {
-		return nginxLocationHeader(name, block)
+		return nginxLocationHeader(name, result)
 	}
 	if name == "server" || name == "upstream" {
-		return nginxNamedBlockHeader(name, block)
+		return nginxNamedBlockHeader(name, result)
 	}
-	return fmt.Sprintf("%s {", name)
+	return fmt.Sprintf("%s {", name), result
 }
 
-func nginxLocationHeader(name string, block map[string]any) string {
-	path := block["path"]
-	delete(block, "path")
-	modifier := block["modifier"]
-	delete(block, "modifier")
+func nginxLocationHeader(name string, block map[string]any) (string, map[string]any) {
+	// Copy to avoid mutating caller's map
+	result := make(map[string]any, len(block))
+	for k, v := range block {
+		result[k] = v
+	}
+	path := result["path"]
+	delete(result, "path")
+	modifier := result["modifier"]
+	delete(result, "modifier")
 
 	if modifier != nil {
-		return fmt.Sprintf("%s %v %v {", name, modifier, path)
+		return fmt.Sprintf("%s %v %v {", name, modifier, path), result
 	}
-	return fmt.Sprintf("%s %v {", name, path)
+	return fmt.Sprintf("%s %v {", name, path), result
 }
 
-func nginxNamedBlockHeader(name string, block map[string]any) string {
-	blockName := block["name"]
-	delete(block, "name")
-	if blockName != nil {
-		return fmt.Sprintf("%s %v {", name, blockName)
+func nginxNamedBlockHeader(name string, block map[string]any) (string, map[string]any) {
+	// Copy to avoid mutating caller's map
+	result := make(map[string]any, len(block))
+	for k, v := range block {
+		result[k] = v
 	}
-	return fmt.Sprintf("%s {", name)
+	blockName := result["name"]
+	delete(result, "name")
+	if blockName != nil {
+		return fmt.Sprintf("%s %v {", name, blockName), result
+	}
+	return fmt.Sprintf("%s {", name), result
 }
 
 // FromNative parses Nginx native format into configuration.

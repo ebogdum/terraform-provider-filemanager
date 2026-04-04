@@ -263,9 +263,15 @@ func (r *GCSOperationResource) Read(ctx context.Context, req resource.ReadReques
 
 	// Refresh computed values
 	if err := r.refreshObjectInfo(ctx, &data); err != nil {
-		tflog.Warn(ctx, "Failed to refresh object info", map[string]any{
-			"error": err.Error(),
-		})
+		if err == plugin.ErrPathNotFound {
+			resp.State.RemoveResource(ctx)
+			return
+		}
+		resp.Diagnostics.AddError(
+			"Failed to read object metadata",
+			fmt.Sprintf("Could not retrieve metadata for object: %s", err),
+		)
+		return
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -485,10 +491,8 @@ func (r *GCSOperationResource) refreshObjectInfo(ctx context.Context, data *GCSO
 	// Fall back to generic Stat
 	info, err := backend.Stat(ctx, data.ObjectPath.ValueString())
 	if err != nil {
-		// If object doesn't exist, set placeholder values
 		if err == plugin.ErrPathNotFound {
-			r.setMockComputedValues(data)
-			return nil
+			return plugin.ErrPathNotFound
 		}
 		return fmt.Errorf("failed to stat object: %w", err)
 	}
@@ -534,8 +538,7 @@ func (r *GCSOperationResource) refreshFromGCSBackend(ctx context.Context, gcsBac
 	info, err := gcsBackend.GetObjectAttrs(ctx, data.ObjectPath.ValueString())
 	if err != nil {
 		if err == plugin.ErrPathNotFound {
-			r.setMockComputedValues(data)
-			return nil
+			return plugin.ErrPathNotFound
 		}
 		return fmt.Errorf("failed to get object attributes: %w", err)
 	}
@@ -574,28 +577,6 @@ func (r *GCSOperationResource) refreshFromGCSBackend(ctx context.Context, gcsBac
 	}
 
 	return nil
-}
-
-// setMockComputedValues sets mock placeholder values for computed attributes.
-func (r *GCSOperationResource) setMockComputedValues(data *GCSOperationResourceModel) {
-	now := time.Now()
-
-	data.Etag = types.StringValue("mock-etag-12345")
-	data.Size = types.Int64Value(1024)
-	data.ContentType = types.StringValue("application/octet-stream")
-	data.ContentEncoding = types.StringValue("")
-	data.Crc32c = types.StringValue("AAAAAA==")
-	data.Md5Hash = types.StringValue("1B2M2Y8AsgTpgAmY7PhCfg==")
-	data.Generation = types.Int64Value(1234567890123456)
-	data.Metageneration = types.Int64Value(1)
-	data.ComputedStorageClass = types.StringValue("STANDARD")
-	data.TimeCreated = types.StringValue(now.Format(time.RFC3339))
-	data.Updated = types.StringValue(now.Format(time.RFC3339))
-	data.ComputedTemporaryHold = types.BoolValue(data.TemporaryHold.ValueBool())
-	data.EventBasedHold = types.BoolValue(false)
-	data.RetentionExpirationTime = types.StringValue("")
-	data.CurrentMetadata = types.MapNull(types.StringType)
-	data.Owner = types.StringValue("mock-owner@example.com")
 }
 
 // getBackend returns the appropriate backend.

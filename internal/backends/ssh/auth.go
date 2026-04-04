@@ -5,6 +5,7 @@ package ssh
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -20,13 +21,13 @@ func ParsePrivateKey(keyData []byte, passphrase string) (ssh.Signer, error) {
 	var signer ssh.Signer
 	var err error
 
-	if passphrase != "" {
+	if "" != passphrase {
 		signer, err = ssh.ParsePrivateKeyWithPassphrase(keyData, []byte(passphrase))
 	} else {
 		signer, err = ssh.ParsePrivateKey(keyData)
 	}
 
-	if err != nil {
+	if nil != err {
 		return nil, fmt.Errorf("failed to parse private key: %w", err)
 	}
 
@@ -38,53 +39,56 @@ func LoadPrivateKeyFile(keyPath string, passphrase string) (ssh.Signer, error) {
 	// Expand ~ to home directory
 	if strings.HasPrefix(keyPath, "~") {
 		home, err := os.UserHomeDir()
-		if err != nil {
+		if nil != err {
 			return nil, fmt.Errorf("failed to get home directory: %w", err)
 		}
 		keyPath = filepath.Join(home, keyPath[1:])
 	}
 
 	keyData, err := os.ReadFile(keyPath)
-	if err != nil {
+	if nil != err {
 		return nil, fmt.Errorf("failed to read private key file %s: %w", keyPath, err)
 	}
 
 	return ParsePrivateKey(keyData, passphrase)
 }
 
-// SSHAgentAuth returns an SSH agent authentication method.
-func SSHAgentAuth() (ssh.AuthMethod, error) {
+// SSHAgentAuth returns an SSH agent authentication method and the underlying
+// connection. The caller should arrange to close the returned io.Closer when
+// the auth method is no longer needed. For provider-scoped usage the agent
+// connection is typically held for the process lifetime.
+func SSHAgentAuth() (ssh.AuthMethod, io.Closer, error) {
 	socket := os.Getenv("SSH_AUTH_SOCK")
-	if socket == "" {
-		return nil, fmt.Errorf("SSH_AUTH_SOCK environment variable not set")
+	if "" == socket {
+		return nil, nil, fmt.Errorf("SSH_AUTH_SOCK environment variable not set")
 	}
 
 	conn, err := net.Dial("unix", socket)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to SSH agent: %w", err)
+	if nil != err {
+		return nil, nil, fmt.Errorf("failed to connect to SSH agent: %w", err)
 	}
 
 	agentClient := agent.NewClient(conn)
-	return ssh.PublicKeysCallback(agentClient.Signers), nil
+	return ssh.PublicKeysCallback(agentClient.Signers), conn, nil
 }
 
 // ParseKnownHosts parses known_hosts data and returns a host key callback.
+// A temporary directory with restrictive permissions (0700) is used to hold
+// the known_hosts data while it is parsed.
 func ParseKnownHosts(data []byte) (ssh.HostKeyCallback, error) {
-	// Create a temporary file with the known hosts data
-	tmpFile, err := os.CreateTemp("", "known_hosts")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	tmpDir, err := os.MkdirTemp("", "known_hosts")
+	if nil != err {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer os.RemoveAll(tmpDir)
 
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
+	tmpFile := filepath.Join(tmpDir, "known_hosts")
+	if err := os.WriteFile(tmpFile, data, 0600); nil != err {
 		return nil, fmt.Errorf("failed to write known hosts data: %w", err)
 	}
-	tmpFile.Close()
 
-	callback, err := knownhosts.New(tmpFile.Name())
-	if err != nil {
+	callback, err := knownhosts.New(tmpFile)
+	if nil != err {
 		return nil, fmt.Errorf("failed to parse known hosts: %w", err)
 	}
 
@@ -96,14 +100,14 @@ func LoadKnownHostsFile(path string) (ssh.HostKeyCallback, error) {
 	// Expand ~ to home directory
 	if strings.HasPrefix(path, "~") {
 		home, err := os.UserHomeDir()
-		if err != nil {
+		if nil != err {
 			return nil, fmt.Errorf("failed to get home directory: %w", err)
 		}
 		path = filepath.Join(home, path[1:])
 	}
 
 	callback, err := knownhosts.New(path)
-	if err != nil {
+	if nil != err {
 		return nil, fmt.Errorf("failed to load known hosts from %s: %w", path, err)
 	}
 
@@ -114,7 +118,7 @@ func LoadKnownHostsFile(path string) (ssh.HostKeyCallback, error) {
 // Returns an error if the known_hosts file does not exist.
 func DefaultKnownHostsCallback() (ssh.HostKeyCallback, error) {
 	home, err := os.UserHomeDir()
-	if err != nil {
+	if nil != err {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 
@@ -128,23 +132,28 @@ func DefaultKnownHostsCallback() (ssh.HostKeyCallback, error) {
 	return knownhosts.New(knownHostsPath)
 }
 
-// HostKeyCallbackFromString creates a host key callback from a single host key string.
-// The format is: "ssh-rsa AAAA..." or "ssh-ed25519 AAAA..."
+// HostKeyCallbackFromString creates a host key callback from a host key entry.
+// Accepted formats:
+//   - "ssh-rsa AAAA..." — key-only (validates key material, not hostname)
+//   - "hostname ssh-rsa AAAA..." — hostname-bound (validates both key and hostname)
+//
+// The hostname-bound format matches the known_hosts file format and is preferred
+// for security as it prevents key reuse across different hosts.
 func HostKeyCallbackFromString(hostKey string) (ssh.HostKeyCallback, error) {
-	if hostKey == "" {
+	if "" == hostKey {
 		return nil, fmt.Errorf("host key string is empty")
 	}
 
 	// Parse the public key
 	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(hostKey))
-	if err != nil {
+	if nil != err {
 		return nil, fmt.Errorf("failed to parse host key: %w", err)
 	}
 
 	// Create a callback that accepts only this specific key
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		if !bytes.Equal(key.Marshal(), pubKey.Marshal()) {
-			return fmt.Errorf("host key mismatch for %s", hostname)
+			return fmt.Errorf("host key mismatch for %s (remote: %s)", hostname, remote)
 		}
 		return nil
 	}, nil
@@ -173,7 +182,7 @@ func CombinedAuth(methods ...ssh.AuthMethod) ssh.AuthMethod {
 	// Return first non-nil method for simplicity
 	// In practice, SSH client tries all configured methods
 	for _, m := range methods {
-		if m != nil {
+		if nil != m {
 			return m
 		}
 	}
@@ -195,8 +204,8 @@ type AuthConfig struct {
 
 	// Host key verification
 	HostKey          string // Single host key string
-	KnownHostsPath   string // Path to known_hosts file
-	KnownHostsData   []byte // Inline known_hosts data
+	KnownHostsPath  string // Path to known_hosts file
+	KnownHostsData  []byte // Inline known_hosts data
 	InsecureNoVerify bool   // Insecure mode is intentionally unsupported.
 }
 
@@ -207,16 +216,16 @@ func BuildAuthMethods(config AuthConfig) ([]ssh.AuthMethod, error) {
 	// Private key from data
 	if len(config.PrivateKey) > 0 {
 		signer, err := ParsePrivateKey(config.PrivateKey, config.Passphrase)
-		if err != nil {
+		if nil != err {
 			return nil, fmt.Errorf("failed to parse private key: %w", err)
 		}
 		methods = append(methods, ssh.PublicKeys(signer))
 	}
 
 	// Private key from file
-	if config.PrivateKeyPath != "" && len(config.PrivateKey) == 0 {
+	if "" != config.PrivateKeyPath && 0 == len(config.PrivateKey) {
 		signer, err := LoadPrivateKeyFile(config.PrivateKeyPath, config.Passphrase)
-		if err != nil {
+		if nil != err {
 			return nil, fmt.Errorf("failed to load private key file: %w", err)
 		}
 		methods = append(methods, ssh.PublicKeys(signer))
@@ -224,22 +233,22 @@ func BuildAuthMethods(config AuthConfig) ([]ssh.AuthMethod, error) {
 
 	// SSH agent
 	if config.UseAgent {
-		agentAuth, err := SSHAgentAuth()
-		if err == nil {
+		agentAuth, _, err := SSHAgentAuth()
+		if nil == err {
 			methods = append(methods, agentAuth)
 		}
 		// Ignore agent errors - might not be available
 	}
 
 	// Password authentication
-	if config.Password != "" {
+	if "" != config.Password {
 		methods = append(methods, ssh.Password(config.Password))
 	}
 
 	// If no methods configured, try SSH agent as fallback
-	if len(methods) == 0 {
-		agentAuth, err := SSHAgentAuth()
-		if err == nil {
+	if 0 == len(methods) {
+		agentAuth, _, err := SSHAgentAuth()
+		if nil == err {
 			methods = append(methods, agentAuth)
 		}
 	}
@@ -255,7 +264,7 @@ func BuildHostKeyCallback(config AuthConfig) (ssh.HostKeyCallback, error) {
 	}
 
 	// Single host key
-	if config.HostKey != "" {
+	if "" != config.HostKey {
 		return HostKeyCallbackFromString(config.HostKey)
 	}
 
@@ -265,7 +274,7 @@ func BuildHostKeyCallback(config AuthConfig) (ssh.HostKeyCallback, error) {
 	}
 
 	// Known hosts from file
-	if config.KnownHostsPath != "" {
+	if "" != config.KnownHostsPath {
 		return LoadKnownHostsFile(config.KnownHostsPath)
 	}
 
@@ -276,7 +285,7 @@ func BuildHostKeyCallback(config AuthConfig) (ssh.HostKeyCallback, error) {
 // LoadDefaultPrivateKey attempts to load a private key from default locations.
 func LoadDefaultPrivateKey(passphrase string) (ssh.Signer, error) {
 	home, err := os.UserHomeDir()
-	if err != nil {
+	if nil != err {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 
@@ -294,7 +303,7 @@ func LoadDefaultPrivateKey(passphrase string) (ssh.Signer, error) {
 		}
 
 		signer, err := LoadPrivateKeyFile(keyPath, passphrase)
-		if err == nil {
+		if nil == err {
 			return signer, nil
 		}
 	}

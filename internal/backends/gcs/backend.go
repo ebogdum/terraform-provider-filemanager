@@ -509,7 +509,12 @@ func (b *Backend) fullPath(key string) string {
 	if b.pathPrefix == "" {
 		return key
 	}
-	return path.Join(b.pathPrefix, key)
+	result := path.Join(b.pathPrefix, key)
+	// Prevent traversal outside prefix
+	if !strings.HasPrefix(result, b.pathPrefix) {
+		return b.pathPrefix
+	}
+	return result
 }
 
 // Ensure Backend implements GCSBackend.

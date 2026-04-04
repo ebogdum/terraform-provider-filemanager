@@ -87,5 +87,5 @@ data "filemanager_environment" "aws" {
 
 - `id` (String) Unique identifier for the data source.
 - `var_count` (Number) Number of environment variables returned.
-- `var_map` (Map of String) Alias for vars. Map of environment variable names to their values.
-- `vars` (Map of String) Map of environment variable names to their values.
+- `var_map` (Map of String, Sensitive) Alias for vars. Map of environment variable names to their values.
+- `vars` (Map of String, Sensitive) Map of environment variable names to their values.

@@ -72,7 +72,11 @@ func xmlNodeToMap(node *xmlquery.Node) any {
 		for child := node.FirstChild; child != nil; child = child.NextSibling {
 			if child.Type == xmlquery.ElementNode {
 				result := make(map[string]any)
-				result[child.Data] = elementToMap(child)
+				val, err := elementToMap(child, 0)
+				if err != nil {
+					return nil
+				}
+				result[child.Data] = val
 				return result
 			}
 		}
@@ -80,7 +84,11 @@ func xmlNodeToMap(node *xmlquery.Node) any {
 
 	case xmlquery.ElementNode:
 		result := make(map[string]any)
-		result[node.Data] = elementToMap(node)
+		val, err := elementToMap(node, 0)
+		if err != nil {
+			return nil
+		}
+		result[node.Data] = val
 		return result
 
 	case xmlquery.TextNode:
@@ -91,10 +99,20 @@ func xmlNodeToMap(node *xmlquery.Node) any {
 	}
 }
 
+const maxXMLDepth = 500
+
 // elementToMap converts an XML element to a map.
-func elementToMap(node *xmlquery.Node) any {
+func elementToMap(node *xmlquery.Node, depth ...int) (any, error) {
+	currentDepth := 0
+	if len(depth) > 0 {
+		currentDepth = depth[0]
+	}
+	if currentDepth > maxXMLDepth {
+		return nil, fmt.Errorf("XML nesting depth exceeds maximum of %d", maxXMLDepth)
+	}
+
 	if node == nil {
-		return nil
+		return nil, nil
 	}
 
 	result := make(map[string]any)
@@ -117,7 +135,10 @@ func elementToMap(node *xmlquery.Node) any {
 		switch child.Type {
 		case xmlquery.ElementNode:
 			hasElementChildren = true
-			childValue := elementToMap(child)
+			childValue, err := elementToMap(child, currentDepth+1)
+			if err != nil {
+				return nil, err
+			}
 			childMap[child.Data] = append(childMap[child.Data], childValue)
 
 		case xmlquery.TextNode:
@@ -143,16 +164,16 @@ func elementToMap(node *xmlquery.Node) any {
 			result["#text"] = textContent.String()
 		} else {
 			// Pure text element
-			return textContent.String()
+			return textContent.String(), nil
 		}
 	}
 
 	// If result is empty and no text, return empty map
 	if len(result) == 0 {
-		return make(map[string]any)
+		return make(map[string]any), nil
 	}
 
-	return result
+	return result, nil
 }
 
 // Serialize serializes a Go value to XML.
@@ -244,8 +265,14 @@ func serializeMap(w io.Writer, m map[string]any, currentIndent, indentStep strin
 	return nil
 }
 
+// xmlNameRegex validates XML element names (simplified check).
+var xmlNameRegex = regexp.MustCompile(`^[a-zA-Z_:][\w.\-:]*$`)
+
 // serializeElement serializes a single XML element.
 func serializeElement(w io.Writer, name string, value any, currentIndent, indentStep string, opts plugin.SerializeOptions) error {
+	if !xmlNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid XML element name: %q", name)
+	}
 	switch v := value.(type) {
 	case []any:
 		// Multiple elements with same name
@@ -484,7 +511,11 @@ func nodeToValue(node *xmlquery.Node) any {
 		return node.InnerText()
 
 	case xmlquery.ElementNode:
-		return elementToMap(node)
+		val, err := elementToMap(node, 0)
+		if err != nil {
+			return nil
+		}
+		return val
 
 	default:
 		return node.InnerText()

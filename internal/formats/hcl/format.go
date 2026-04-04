@@ -796,7 +796,7 @@ func replaceParentSlice(result, parent any, parentMapKey string, parentSliceIdx 
 
 // FormatFile formats HCL data.
 func FormatFile(data []byte) ([]byte, error) {
-	file, diags := hclwrite.ParseConfig(data, "format.hcl", hcl.Pos{})
+	file, diags := hclwrite.ParseConfig(data, "format.hcl", hcl.Pos{Line: 1, Column: 1})
 	if diags.HasErrors() {
 		return nil, fmt.Errorf("HCL parse error: %s", diags.Error())
 	}

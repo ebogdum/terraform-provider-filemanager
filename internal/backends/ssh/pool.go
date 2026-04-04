@@ -5,6 +5,7 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -26,7 +27,7 @@ type PoolConfig struct {
 	// MaxRetries is the maximum number of connection attempts.
 	MaxRetries int
 
-	// RetryDelay is the delay between connection attempts.
+	// RetryDelay is the initial delay between connection attempts.
 	RetryDelay time.Duration
 }
 
@@ -90,17 +91,17 @@ func (p *ConnectionPool) Configure(address string, config *ssh.ClientConfig) {
 // Get retrieves an available connection from the pool, or creates a new one.
 func (p *ConnectionPool) Get(ctx context.Context) (*PooledConnection, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if p.closed {
+		p.mu.Unlock()
 		return nil, fmt.Errorf("connection pool is closed")
 	}
 
-	// Look for an available connection
+	// Find first idle connection that passes basic health check (no network call under lock)
 	for _, conn := range p.connections {
-		if !conn.InUse && p.isHealthy(conn) {
+		if !conn.InUse && p.isHealthyNoLock(conn) {
 			conn.InUse = true
 			conn.LastUsedAt = time.Now()
+			p.mu.Unlock()
 			return conn, nil
 		}
 	}
@@ -108,16 +109,16 @@ func (p *ConnectionPool) Get(ctx context.Context) (*PooledConnection, error) {
 	// Create a new connection if under limit
 	if len(p.connections) < p.config.MaxConnections {
 		conn, err := p.createConnection(ctx)
-		if err != nil {
+		if nil != err {
+			p.mu.Unlock()
 			return nil, err
 		}
 		p.connections = append(p.connections, conn)
+		p.mu.Unlock()
 		return conn, nil
 	}
+	p.mu.Unlock()
 
-	// Wait for an available connection or timeout
-	// For simplicity, we just return an error here
-	// A more sophisticated implementation would use channels/condition variables
 	return nil, fmt.Errorf("connection pool exhausted")
 }
 
@@ -126,7 +127,7 @@ func (p *ConnectionPool) Put(conn *PooledConnection) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if conn == nil {
+	if nil == conn {
 		return
 	}
 
@@ -139,15 +140,15 @@ func (p *ConnectionPool) Release(conn *PooledConnection) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if conn == nil {
+	if nil == conn {
 		return
 	}
 
 	// Close the connection
-	if conn.SFTPClient != nil {
+	if nil != conn.SFTPClient {
 		conn.SFTPClient.Close()
 	}
-	if conn.SSHClient != nil {
+	if nil != conn.SSHClient {
 		conn.SSHClient.Close()
 	}
 
@@ -172,13 +173,13 @@ func (p *ConnectionPool) Close() error {
 
 	var errs []error
 	for _, conn := range p.connections {
-		if conn.SFTPClient != nil {
-			if err := conn.SFTPClient.Close(); err != nil {
+		if nil != conn.SFTPClient {
+			if err := conn.SFTPClient.Close(); nil != err {
 				errs = append(errs, err)
 			}
 		}
-		if conn.SSHClient != nil {
-			if err := conn.SSHClient.Close(); err != nil {
+		if nil != conn.SSHClient {
+			if err := conn.SSHClient.Close(); nil != err {
 				errs = append(errs, err)
 			}
 		}
@@ -192,38 +193,46 @@ func (p *ConnectionPool) Close() error {
 	return nil
 }
 
-// createConnection creates a new SSH/SFTP connection.
+// createConnection creates a new SSH/SFTP connection with exponential backoff and jitter.
 func (p *ConnectionPool) createConnection(ctx context.Context) (*PooledConnection, error) {
-	if p.dial == nil {
+	if nil == p.dial {
 		return nil, fmt.Errorf("connection pool not configured")
 	}
 
 	var sshClient *ssh.Client
 	var err error
 
-	// Retry logic
+	// Retry with exponential backoff and jitter
+	delay := p.config.RetryDelay
+	const maxDelay = 30 * time.Second
+
 	for attempt := 0; attempt <= p.config.MaxRetries; attempt++ {
 		if attempt > 0 {
+			jitter := time.Duration(rand.Int64N(int64(delay) / 2))
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(p.config.RetryDelay):
+			case <-time.After(delay + jitter):
+			}
+			delay = delay * 2
+			if delay > maxDelay {
+				delay = maxDelay
 			}
 		}
 
 		sshClient, err = p.dial()
-		if err == nil {
+		if nil == err {
 			break
 		}
 	}
 
-	if err != nil {
+	if nil != err {
 		return nil, fmt.Errorf("failed to connect after %d attempts: %w", p.config.MaxRetries+1, err)
 	}
 
 	// Create SFTP client
 	sftpClient, err := sftp.NewClient(sshClient)
-	if err != nil {
+	if nil != err {
 		sshClient.Close()
 		return nil, fmt.Errorf("failed to create SFTP client: %w", err)
 	}
@@ -238,47 +247,36 @@ func (p *ConnectionPool) createConnection(ctx context.Context) (*PooledConnectio
 	}, nil
 }
 
-// isHealthy checks if a connection is still usable.
-func (p *ConnectionPool) isHealthy(conn *PooledConnection) bool {
-	if conn == nil || conn.SSHClient == nil || conn.SFTPClient == nil {
-		return false
-	}
-
-	// Check if connection has been idle too long
-	if time.Since(conn.LastUsedAt) > p.config.IdleTimeout {
-		return false
-	}
-
-	// Try a simple operation to verify the connection
-	_, err := conn.SFTPClient.Getwd()
-	return err == nil
-}
-
 // Cleanup removes idle and unhealthy connections from the pool.
+// Connections are closed outside the lock to avoid blocking pool operations on network timeouts.
 func (p *ConnectionPool) Cleanup() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	var healthy []*PooledConnection
+	var toClose []*PooledConnection
 	for _, conn := range p.connections {
 		if conn.InUse || p.isHealthyNoLock(conn) {
 			healthy = append(healthy, conn)
 		} else {
-			// Close unhealthy/idle connection
-			if conn.SFTPClient != nil {
-				conn.SFTPClient.Close()
-			}
-			if conn.SSHClient != nil {
-				conn.SSHClient.Close()
-			}
+			toClose = append(toClose, conn)
 		}
 	}
 	p.connections = healthy
+	p.mu.Unlock()
+
+	// Close outside the lock
+	for _, conn := range toClose {
+		if nil != conn.SFTPClient {
+			conn.SFTPClient.Close()
+		}
+		if nil != conn.SSHClient {
+			conn.SSHClient.Close()
+		}
+	}
 }
 
 // isHealthyNoLock checks health without acquiring the lock (for internal use).
 func (p *ConnectionPool) isHealthyNoLock(conn *PooledConnection) bool {
-	if conn == nil || conn.SSHClient == nil || conn.SFTPClient == nil {
+	if nil == conn || nil == conn.SSHClient || nil == conn.SFTPClient {
 		return false
 	}
 
@@ -335,7 +333,7 @@ func (p *ConnectionPool) StartHealthCheck(ctx context.Context) {
 		return
 	}
 	// Don't start a second health check
-	if p.healthCheckStop != nil {
+	if nil != p.healthCheckStop {
 		p.mu.Unlock()
 		return
 	}
@@ -370,7 +368,7 @@ func (p *ConnectionPool) StartHealthCheck(ctx context.Context) {
 // StopHealthCheck stops the health check goroutine and waits for it to finish.
 func (p *ConnectionPool) StopHealthCheck() {
 	p.mu.Lock()
-	if p.healthCheckStop == nil {
+	if nil == p.healthCheckStop {
 		p.mu.Unlock()
 		return
 	}
@@ -395,7 +393,7 @@ func (p *ConnectionPool) WarmUp(ctx context.Context, count int) error {
 
 	for i := 0; i < count; i++ {
 		conn, err := p.Get(ctx)
-		if err != nil {
+		if nil != err {
 			return fmt.Errorf("failed to warm up connection %d: %w", i+1, err)
 		}
 		p.Put(conn)

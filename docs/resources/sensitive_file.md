@@ -81,7 +81,7 @@ Manages a file with sensitive content. The content is marked as sensitive and wi
 - `filename` (String) The base name of the file (e.g., 'config.json').
 - `id` (String) Unique identifier for the resource.
 - `md5` (String) Deprecated insecure checksum field. Always null.
-- `sha256` (String) SHA-256 checksum of the file content.
+- `sha256` (String, Sensitive) SHA-256 checksum of the file content.
 - `size` (Number) Size of the file in bytes.
 
 ## Import

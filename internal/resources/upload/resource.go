@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -327,7 +328,17 @@ func (r *UploadResource) Delete(ctx context.Context, req resource.DeleteRequest,
 
 // ImportState imports an existing resource.
 func (r *UploadResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	// Parse composite ID format: "backend:path"
+	parts := strings.SplitN(req.ID, ":", 2)
+	if len(parts) != 2 {
+		resp.Diagnostics.AddError(
+			"Invalid Import ID",
+			fmt.Sprintf("Expected format 'backend:path', got: %s", req.ID),
+		)
+		return
+	}
+	resp.State.SetAttribute(ctx, path.Root("destination_backend"), parts[0])
+	resp.State.SetAttribute(ctx, path.Root("destination_path"), parts[1])
 }
 
 // uploadResult holds the result of an upload operation.
@@ -393,9 +404,15 @@ func (r *UploadResource) performUpload(ctx context.Context, data *UploadResource
 			// Calculate relative path
 			relPath := file.Name
 
+			// Validate path safety
+			cleanRel := filepath.Clean(relPath)
+			if filepath.IsAbs(cleanRel) || strings.HasPrefix(cleanRel, "..") {
+				return nil, fmt.Errorf("backend returned unsafe path: %s", relPath)
+			}
+
 			// Upload file
 			srcPath := file.Path
-			dstPath := filepath.Join(data.DestinationPath.ValueString(), relPath)
+			dstPath := filepath.Join(data.DestinationPath.ValueString(), cleanRel)
 
 			bytes, err := r.uploadFile(ctx, srcBackend, srcPath, dstBackend, dstPath, opts)
 			if err != nil {
@@ -443,7 +460,7 @@ func (r *UploadResource) uploadFile(ctx context.Context, srcBackend plugin.Backe
 		return 0, fmt.Errorf("failed to write destination: %w", err)
 	}
 
-	return cr.Count, nil
+	return cr.Count(), nil
 }
 
 // getBackend returns the appropriate backend.

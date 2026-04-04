@@ -175,9 +175,14 @@ func (b *Backend) Write(ctx context.Context, blobName string, r io.Reader, opts 
 	fullPath := b.fullPath(blobName)
 
 	// Read all content (Azure requires knowing content length for block blobs)
-	data, err := io.ReadAll(r)
+	const maxAzureWriteBytes = 256 * 1024 * 1024 // 256 MB
+	limited := io.LimitReader(r, maxAzureWriteBytes+1)
+	data, err := io.ReadAll(limited)
 	if err != nil {
 		return fmt.Errorf("failed to read content: %w", err)
+	}
+	if int64(len(data)) > maxAzureWriteBytes {
+		return fmt.Errorf("file size exceeds maximum of %d bytes", maxAzureWriteBytes)
 	}
 
 	blockBlobClient := b.client.ServiceClient().NewContainerClient(b.containerName).NewBlockBlobClient(fullPath)
@@ -672,7 +677,12 @@ func (b *Backend) fullPath(blobName string) string {
 	if b.pathPrefix == "" {
 		return blobName
 	}
-	return path.Join(b.pathPrefix, blobName)
+	result := path.Join(b.pathPrefix, blobName)
+	// Prevent traversal outside prefix
+	if !strings.HasPrefix(result, b.pathPrefix) {
+		return b.pathPrefix
+	}
+	return result
 }
 
 func isNotFoundError(err error) bool {

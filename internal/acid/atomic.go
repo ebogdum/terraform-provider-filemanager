@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 // AtomicWriter implements atomic file writes with ACID guarantees.
@@ -224,6 +226,7 @@ func (w *AtomicWriter) setOwnership(path string, uid, gid int) error {
 }
 
 // copyFile copies a file when rename across devices fails.
+// Uses a temporary file + rename to preserve atomicity even on cross-device writes.
 func (w *AtomicWriter) copyFile(src, dst string, mode os.FileMode) error {
 	srcFile, err := os.Open(src)
 	if err != nil {
@@ -231,17 +234,40 @@ func (w *AtomicWriter) copyFile(src, dst string, mode os.FileMode) error {
 	}
 	defer srcFile.Close()
 
-	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	dstDir := filepath.Dir(dst)
+	tmpFile, err := os.CreateTemp(dstDir, ".tmp.*")
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
+	tmpPath := tmpFile.Name()
 
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
+	success := false
+	defer func() {
+		if !success {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := io.Copy(tmpFile, srcFile); err != nil {
 		return err
 	}
-
-	return dstFile.Sync()
+	if err := tmpFile.Sync(); err != nil {
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	if mode != 0 {
+		if err := os.Chmod(tmpPath, mode); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		return err
+	}
+	success = true
+	return nil
 }
 
 // syncDir syncs a directory to ensure rename is durable.
@@ -265,10 +291,11 @@ func isCrossDeviceError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for EXDEV error (cross-device link)
-	return os.IsNotExist(err) || // Shouldn't happen but check anyway
-		err.Error() == "invalid cross-device link" ||
-		err.Error() == "rename: invalid cross-device link"
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return errors.Is(linkErr.Err, syscall.EXDEV)
+	}
+	return strings.Contains(err.Error(), "invalid cross-device link")
 }
 
 // newHasher creates a new hash.Hash for the given algorithm.

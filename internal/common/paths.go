@@ -21,7 +21,10 @@ type PathOutputs struct {
 
 // ComputePathOutputs computes all path-related outputs from a file path.
 func ComputePathOutputs(path string) PathOutputs {
-	absPath, _ := filepath.Abs(path)
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path
+	}
 	ext := filepath.Ext(absPath)
 
 	return PathOutputs{

@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -121,6 +122,9 @@ func (r *S3ServiceResource) Schema(ctx context.Context, req resource.SchemaReque
 			"connected": schema.BoolAttribute{
 				Description: "Whether the service is currently connected.",
 				Computed:    true,
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"service_type": schema.StringAttribute{
 				Description: "The type of service (s3, gcs, azure, b2, or ssh).",
@@ -299,8 +303,12 @@ func (r *S3ServiceResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	// Update registration (remove old, add new)
+	// Close old backend and replace alias
 	serviceID := data.ID.ValueString()
+	oldBackend, oldErr := r.config.Registry.Backends.GetAlias(serviceID)
+	if nil == oldErr {
+		_ = oldBackend.Close()
+	}
 	r.config.Registry.Backends.RemoveAlias(serviceID)
 	if err := r.config.Registry.Backends.SetAlias(serviceID, backend); err != nil {
 		resp.Diagnostics.AddError("Failed to update S3 service registration", err.Error())

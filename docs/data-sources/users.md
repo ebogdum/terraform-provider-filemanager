@@ -23,7 +23,7 @@ Lists all users on the system. This data source reads from /etc/passwd on Unix/L
 - `id` (String) Unique identifier for the data source.
 - `uid_map` (Map of String) Map of UID (as string) to username for reverse lookup.
 - `user_map` (Map of Number) Map of username to UID for easy lookup.
-- `users` (Attributes List) List of users. (see [below for nested schema](#nestedatt--users))
+- `users` (Attributes List, Sensitive) List of users. (see [below for nested schema](#nestedatt--users))
 
 <a id="nestedatt--users"></a>
 ### Nested Schema for `users`

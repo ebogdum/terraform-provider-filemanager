@@ -5,8 +5,8 @@ package b2_operation
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -529,7 +529,9 @@ func (r *B2OperationResource) handleB2UpdateLegalHold(ctx context.Context, backe
 
 // populateResultFromFileInfo populates the result from generic FileInfo.
 func (r *B2OperationResource) populateResultFromFileInfo(result *b2OperationResult, info *plugin.FileInfo, data *B2OperationResourceModel) {
-	result.fileID = fmt.Sprintf("4_%s_%d", data.FilePath.ValueString(), time.Now().UnixNano())
+	// Use a stable hash of path as file ID when real B2 file ID is unavailable
+	h := sha256.Sum256([]byte(data.FilePath.ValueString()))
+	result.fileID = fmt.Sprintf("4_%s_%x", data.FilePath.ValueString(), h[:8])
 	result.fileName = info.Name
 	result.contentLength = info.Size
 	result.contentType = info.ContentType

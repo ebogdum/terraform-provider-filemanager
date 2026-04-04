@@ -209,7 +209,11 @@ func (r *DirectoryResource) Create(ctx context.Context, req resource.CreateReque
 	mode := common.ParseDirMode(data.Permission.ValueString())
 	if err := backend.Chmod(ctx, data.Path.ValueString(), mode); err != nil {
 		if err != plugin.ErrNotSupported {
-			resp.Diagnostics.AddWarning("Failed to set permissions", err.Error())
+			resp.Diagnostics.AddError(
+				"Failed to set directory permissions",
+				fmt.Sprintf("Directory was created but permissions could not be set: %s", err),
+			)
+			return
 		}
 	}
 
@@ -306,7 +310,8 @@ func (r *DirectoryResource) Update(ctx context.Context, req resource.UpdateReque
 	mode := common.ParseDirMode(data.Permission.ValueString())
 	if err := backend.Chmod(ctx, data.Path.ValueString(), mode); err != nil {
 		if err != plugin.ErrNotSupported {
-			resp.Diagnostics.AddWarning("Failed to set permissions", err.Error())
+			resp.Diagnostics.AddError("Failed to set directory permissions", err.Error())
+				return
 		}
 	}
 

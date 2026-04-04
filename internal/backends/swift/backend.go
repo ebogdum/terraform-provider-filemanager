@@ -197,17 +197,32 @@ func (b *Backend) Ping(ctx context.Context) error {
 }
 
 // resolvePath resolves a relative path against the base path and normalizes for Swift.
-func (b *Backend) resolvePath(p string) string {
+func (b *Backend) resolvePath(p string) (string, error) {
 	p = path.Clean(p)
 	// Remove leading slash for Swift objects
 	p = strings.TrimPrefix(p, "/")
+
+	var resolved string
 	if b.basePath != "" {
 		basePath := strings.TrimPrefix(b.basePath, "/")
 		if basePath != "" {
-			return basePath + "/" + p
+			resolved = basePath + "/" + p
+		} else {
+			resolved = p
+		}
+	} else {
+		return p, nil
+	}
+
+	// Enforce basePath containment
+	if b.basePath != "" {
+		base := strings.TrimPrefix(b.basePath, "/")
+		if base != "" && resolved != base && !strings.HasPrefix(resolved+"/", base+"/") {
+			return "", fmt.Errorf("path %q escapes base path %q", p, b.basePath)
 		}
 	}
-	return p
+
+	return resolved, nil
 }
 
 // Read reads a file and returns an io.ReadCloser.
@@ -219,7 +234,10 @@ func (b *Backend) Read(ctx context.Context, filePath string) (io.ReadCloser, err
 		return nil, plugin.ErrNotConnected
 	}
 
-	objectPath := b.resolvePath(filePath)
+	objectPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return nil, err
+	}
 
 	contents, _, err := b.conn.ObjectOpen(ctx, b.container, objectPath, false, nil)
 	if err != nil {
@@ -241,7 +259,10 @@ func (b *Backend) Write(ctx context.Context, filePath string, r io.Reader, opts 
 		return plugin.ErrNotConnected
 	}
 
-	objectPath := b.resolvePath(filePath)
+	objectPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return err
+	}
 
 	// Check if object exists and we're not overwriting
 	if !opts.Overwrite {
@@ -278,7 +299,7 @@ func (b *Backend) Write(ctx context.Context, filePath string, r io.Reader, opts 
 	}
 
 	// Upload object
-	_, err := b.conn.ObjectPut(ctx, b.container, objectPath, r, false, "", contentType, headers)
+	_, err = b.conn.ObjectPut(ctx, b.container, objectPath, r, false, "", contentType, headers)
 	if err != nil {
 		return err
 	}
@@ -286,8 +307,18 @@ func (b *Backend) Write(ctx context.Context, filePath string, r io.Reader, opts 
 	return nil
 }
 
+const maxRecursionDepth = 100
+
 // createPseudoDir creates pseudo-directories (empty objects with trailing slash).
-func (b *Backend) createPseudoDir(ctx context.Context, dirPath string) error {
+func (b *Backend) createPseudoDir(ctx context.Context, dirPath string, depth ...int) error {
+	currentDepth := 0
+	if len(depth) > 0 {
+		currentDepth = depth[0]
+	}
+	if currentDepth > maxRecursionDepth {
+		return fmt.Errorf("directory recursion depth exceeds maximum of %d", maxRecursionDepth)
+	}
+
 	if dirPath == "" || dirPath == "." {
 		return nil
 	}
@@ -301,7 +332,7 @@ func (b *Backend) createPseudoDir(ctx context.Context, dirPath string) error {
 	// Create parent first
 	parent := path.Dir(dirPath)
 	if parent != "." && parent != "" && parent != dirPath {
-		if err := b.createPseudoDir(ctx, parent); err != nil {
+		if err := b.createPseudoDir(ctx, parent, currentDepth+1); err != nil {
 			return err
 		}
 	}
@@ -320,7 +351,10 @@ func (b *Backend) Delete(ctx context.Context, filePath string) error {
 		return plugin.ErrNotConnected
 	}
 
-	objectPath := b.resolvePath(filePath)
+	objectPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return err
+	}
 
 	// Check if it's a directory (pseudo-directory in Swift)
 	objs, err := b.conn.ObjectsAll(ctx, b.container, &swift.ObjectsOpts{
@@ -350,10 +384,13 @@ func (b *Backend) Exists(ctx context.Context, filePath string) (bool, error) {
 		return false, plugin.ErrNotConnected
 	}
 
-	objectPath := b.resolvePath(filePath)
+	objectPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return false, err
+	}
 
 	// Check as file
-	_, _, err := b.conn.Object(ctx, b.container, objectPath)
+	_, _, err = b.conn.Object(ctx, b.container, objectPath)
 	if err == nil {
 		return true, nil
 	}
@@ -382,7 +419,10 @@ func (b *Backend) Stat(ctx context.Context, filePath string) (*plugin.FileInfo, 
 		return nil, plugin.ErrNotConnected
 	}
 
-	objectPath := b.resolvePath(filePath)
+	objectPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return nil, err
+	}
 
 	info, headers, err := b.conn.Object(ctx, b.container, objectPath)
 	if err != nil {
@@ -440,7 +480,10 @@ func (b *Backend) List(ctx context.Context, dirPath string, opts plugin.ListOpti
 		return nil, plugin.ErrNotConnected
 	}
 
-	prefix := b.resolvePath(dirPath)
+	prefix, err := b.resolvePath(dirPath)
+	if err != nil {
+		return nil, err
+	}
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
@@ -563,14 +606,17 @@ func (b *Backend) Mkdir(ctx context.Context, dirPath string, opts plugin.MkdirOp
 		return plugin.ErrNotConnected
 	}
 
-	objectPath := b.resolvePath(dirPath)
+	objectPath, err := b.resolvePath(dirPath)
+	if err != nil {
+		return err
+	}
 
 	if opts.Recursive {
 		return b.createPseudoDir(ctx, objectPath)
 	}
 
 	// Create pseudo-directory
-	_, err := b.conn.ObjectPut(ctx, b.container, objectPath+"/", strings.NewReader(""), false, "", "application/directory", nil)
+	_, err = b.conn.ObjectPut(ctx, b.container, objectPath+"/", strings.NewReader(""), false, "", "application/directory", nil)
 	return err
 }
 
@@ -583,7 +629,10 @@ func (b *Backend) Rmdir(ctx context.Context, dirPath string, recursive bool) err
 		return plugin.ErrNotConnected
 	}
 
-	objectPath := b.resolvePath(dirPath)
+	objectPath, err := b.resolvePath(dirPath)
+	if err != nil {
+		return err
+	}
 	if !strings.HasSuffix(objectPath, "/") {
 		objectPath += "/"
 	}
@@ -693,8 +742,14 @@ func (b *Backend) CopyFile(ctx context.Context, src, dst string, opts plugin.Wri
 		return plugin.ErrNotConnected
 	}
 
-	srcPath := b.resolvePath(src)
-	dstPath := b.resolvePath(dst)
+	srcPath, err := b.resolvePath(src)
+	if err != nil {
+		return err
+	}
+	dstPath, err := b.resolvePath(dst)
+	if err != nil {
+		return err
+	}
 
 	// Create parent directories if needed
 	if opts.CreateDirs {
@@ -705,7 +760,7 @@ func (b *Backend) CopyFile(ctx context.Context, src, dst string, opts plugin.Wri
 	}
 
 	// Server-side copy
-	_, err := b.conn.ObjectCopy(ctx, b.container, srcPath, b.container, dstPath, nil)
+	_, err = b.conn.ObjectCopy(ctx, b.container, srcPath, b.container, dstPath, nil)
 	if err != nil {
 		if err == swift.ObjectNotFound {
 			return plugin.ErrPathNotFound
@@ -725,7 +780,10 @@ func (b *Backend) SetMetadata(ctx context.Context, filePath string, metadata map
 		return plugin.ErrNotConnected
 	}
 
-	objectPath := b.resolvePath(filePath)
+	objectPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return err
+	}
 
 	headers := swift.Headers{}
 	for key, value := range metadata {
@@ -744,7 +802,10 @@ func (b *Backend) GetMetadata(ctx context.Context, filePath string) (map[string]
 		return nil, plugin.ErrNotConnected
 	}
 
-	objectPath := b.resolvePath(filePath)
+	objectPath, err := b.resolvePath(filePath)
+	if err != nil {
+		return nil, err
+	}
 
 	_, headers, err := b.conn.Object(ctx, b.container, objectPath)
 	if err != nil {

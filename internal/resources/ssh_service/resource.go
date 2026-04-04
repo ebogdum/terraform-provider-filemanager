@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
@@ -136,7 +137,7 @@ func (r *SSHServiceResource) Schema(ctx context.Context, req resource.SchemaRequ
 				Default:     stringdefault.StaticString("30s"),
 			},
 			"insecure_skip_host_key": schema.BoolAttribute{
-				Description: "Deprecated insecure option. Setting this to true is rejected for security reasons.",
+				Description: "Disable SSH host key verification. WARNING: Setting this to true makes the connection vulnerable to man-in-the-middle attacks. Only use for testing.",
 				Optional:    true,
 			},
 			"known_hosts_file": schema.StringAttribute{
@@ -146,6 +147,9 @@ func (r *SSHServiceResource) Schema(ctx context.Context, req resource.SchemaRequ
 			"connected": schema.BoolAttribute{
 				Description: "Whether the service is currently connected.",
 				Computed:    true,
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"endpoint": schema.StringAttribute{
 				Description: "The SSH endpoint in host:port format.",
@@ -240,7 +244,7 @@ func (r *SSHServiceResource) Create(ctx context.Context, req resource.CreateRequ
 		Timeout:    timeout,
 		Extra: map[string]any{
 			"passphrase":             passphrase,
-			"insecure_skip_host_key": data.InsecureSkipHostKey.ValueBool(),
+			"insecure_skip_host_key_verification": data.InsecureSkipHostKey.ValueBool(),
 			"known_hosts_file":       data.KnownHostsFile.ValueString(),
 		},
 	}
@@ -352,7 +356,7 @@ func (r *SSHServiceResource) Update(ctx context.Context, req resource.UpdateRequ
 		Timeout:    timeout,
 		Extra: map[string]any{
 			"passphrase":             passphrase,
-			"insecure_skip_host_key": data.InsecureSkipHostKey.ValueBool(),
+			"insecure_skip_host_key_verification": data.InsecureSkipHostKey.ValueBool(),
 			"known_hosts_file":       data.KnownHostsFile.ValueString(),
 		},
 	}

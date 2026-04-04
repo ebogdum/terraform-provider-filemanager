@@ -30,13 +30,13 @@ func (f *PathExpandFunction) Metadata(ctx context.Context, req function.Metadata
 func (f *PathExpandFunction) Definition(ctx context.Context, req function.DefinitionRequest, resp *function.DefinitionResponse) {
 	resp.Definition = function.Definition{
 		Summary:             "Expands path",
-		Description:         "Expands ~ to home directory and environment variables in a path.",
-		MarkdownDescription: "Expands `~` to the user's home directory and `$VAR` or `${VAR}` environment variables in a path.",
+		Description:         "Expands ~ to the user's home directory in a path.",
+		MarkdownDescription: "Expands `~` to the user's home directory in a path.",
 		Parameters: []function.Parameter{
 			function.StringParameter{
 				Name:                "path",
 				Description:         "The path to expand.",
-				MarkdownDescription: "The path to expand (may contain `~` or environment variables).",
+				MarkdownDescription: "The path to expand (may contain `~` for home directory).",
 			},
 		},
 		Return: function.StringReturn{},
@@ -56,23 +56,25 @@ func (f *PathExpandFunction) Run(ctx context.Context, req function.RunRequest, r
 	resp.Error = function.ConcatFuncErrors(resp.Error, resp.Result.Set(ctx, result))
 }
 
-// expandPath expands ~ to home directory and environment variables.
+// expandPath expands ~ to the user's home directory.
+// It intentionally does NOT expand environment variables to prevent
+// information disclosure through $VAR expansion in Terraform plans.
 func expandPath(path string) string {
-	// Expand ~ to home directory
-	if strings.HasPrefix(path, "~/") {
+	return safeExpandPath(path)
+}
+
+// safeExpandPath performs home-directory-only expansion without expanding
+// environment variables.
+func safeExpandPath(p string) string {
+	if strings.HasPrefix(p, "~/") || p == "~" {
 		home, err := os.UserHomeDir()
-		if err == nil {
-			path = filepath.Join(home, path[2:])
+		if err != nil {
+			return p
 		}
-	} else if path == "~" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			path = home
+		if p == "~" {
+			return home
 		}
+		return filepath.Join(home, p[2:])
 	}
-
-	// Expand environment variables
-	path = os.ExpandEnv(path)
-
-	return path
+	return p
 }

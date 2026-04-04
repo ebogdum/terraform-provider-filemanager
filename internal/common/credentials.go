@@ -5,6 +5,7 @@ package common
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"strings"
 )
 
@@ -31,23 +32,45 @@ func ReadCredential(value, valuePath string) (string, error) {
 
 	data, err := os.ReadFile(valuePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read credential file %s: %w", valuePath, err)
+		return "", fmt.Errorf("failed to read credential file: %w", err)
 	}
 
 	return strings.TrimSpace(string(data)), nil
 }
 
-// ExpandPath expands ~ to the user's home directory.
+// ExpandPath expands ~ and ~username to the appropriate home directory.
 func ExpandPath(path string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-	if strings.HasPrefix(path, "~/") {
+	if !strings.HasPrefix(path, "~") {
+		return path, nil
+	}
+	// ~/... → current user's home
+	if path == "~" || strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("failed to expand home directory: %w", err)
 		}
+		if path == "~" {
+			return home, nil
+		}
 		return home + path[1:], nil
 	}
-	return path, nil
+	// ~username/... → lookup that user's home
+	slashIdx := strings.IndexByte(path, '/')
+	var username string
+	if slashIdx < 0 {
+		username = path[1:]
+	} else {
+		username = path[1:slashIdx]
+	}
+	u, err := user.Lookup(username)
+	if err != nil {
+		return "", fmt.Errorf("failed to lookup user %s: %w", username, err)
+	}
+	if slashIdx < 0 {
+		return u.HomeDir, nil
+	}
+	return u.HomeDir + path[slashIdx:], nil
 }

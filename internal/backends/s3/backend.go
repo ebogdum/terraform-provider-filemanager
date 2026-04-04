@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -464,7 +465,7 @@ func (b *Backend) CopyObject(ctx context.Context, srcKey, dstKey string) error {
 	fullSrcKey := b.fullPath(srcKey)
 	fullDstKey := b.fullPath(dstKey)
 
-	copySource := fmt.Sprintf("%s/%s", b.bucket, fullSrcKey)
+	copySource := b.bucket + "/" + url.PathEscape(fullSrcKey)
 
 	_, err := b.client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(b.bucket),
@@ -481,7 +482,7 @@ func (b *Backend) CopyObject(ctx context.Context, srcKey, dstKey string) error {
 // SetMetadata updates object metadata (requires copy-to-self).
 func (b *Backend) SetMetadata(ctx context.Context, key string, metadata map[string]string) error {
 	fullKey := b.fullPath(key)
-	copySource := fmt.Sprintf("%s/%s", b.bucket, fullKey)
+	copySource := b.bucket + "/" + url.PathEscape(fullKey)
 
 	_, err := b.client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:            aws.String(b.bucket),
@@ -561,7 +562,7 @@ func (b *Backend) DeleteTags(ctx context.Context, key string) error {
 // SetStorageClass changes the object storage class (requires copy-to-self).
 func (b *Backend) SetStorageClass(ctx context.Context, key string, storageClass string) error {
 	fullKey := b.fullPath(key)
-	copySource := fmt.Sprintf("%s/%s", b.bucket, fullKey)
+	copySource := b.bucket + "/" + url.PathEscape(fullKey)
 
 	_, err := b.client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:       aws.String(b.bucket),
@@ -672,7 +673,12 @@ func (b *Backend) fullPath(key string) string {
 	if b.pathPrefix == "" {
 		return key
 	}
-	return path.Join(b.pathPrefix, key)
+	result := path.Join(b.pathPrefix, key)
+	// Prevent traversal outside prefix
+	if !strings.HasPrefix(result, b.pathPrefix) {
+		return b.pathPrefix
+	}
+	return result
 }
 
 func isNotFoundError(err error) bool {

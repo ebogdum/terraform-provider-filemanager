@@ -52,11 +52,9 @@ func (f *FileExistsFunction) Run(ctx context.Context, req function.RunRequest, r
 
 	info, err := os.Stat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			resp.Error = function.ConcatFuncErrors(resp.Error, resp.Result.Set(ctx, false))
-			return
-		}
-		resp.Error = function.ConcatFuncErrors(resp.Error, function.NewFuncError("Failed to check file: "+err.Error()))
+		// Treat all errors (including permission denied) as not found
+		// to avoid leaking file existence via EACCES
+		resp.Error = function.ConcatFuncErrors(resp.Error, resp.Result.Set(ctx, false))
 		return
 	}
 

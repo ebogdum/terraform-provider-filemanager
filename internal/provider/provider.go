@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -379,6 +380,7 @@ func int64ValueOrDefault(v types.Int64, def int64) int64 {
 func parseDuration(s string) time.Duration {
 	d, err := time.ParseDuration(s)
 	if err != nil {
+		log.Printf("[WARN] invalid duration %q, using default 30s", s)
 		return 30 * time.Second
 	}
 	return d

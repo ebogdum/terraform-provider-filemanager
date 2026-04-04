@@ -3,6 +3,7 @@
 package common
 
 import (
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -15,14 +16,16 @@ const DefaultFileMode os.FileMode = 0644
 const DefaultDirMode os.FileMode = 0755
 
 // ParseOctalMode parses an octal permission string (e.g., "0644") into os.FileMode.
-// Returns the provided default if the string is empty or invalid.
+// Returns the provided default if the string is empty.
+// Returns an error if the string is non-empty but not a valid octal mode.
 func ParseOctalMode(s string, defaultMode os.FileMode) os.FileMode {
 	if s == "" {
 		return defaultMode
 	}
-	s = strings.TrimPrefix(s, "0")
-	mode, err := strconv.ParseUint(s, 8, 32)
+	trimmed := strings.TrimPrefix(s, "0")
+	mode, err := strconv.ParseUint(trimmed, 8, 32)
 	if err != nil {
+		log.Printf("[WARN] invalid octal permission %q, using default %04o", s, defaultMode)
 		return defaultMode
 	}
 	return os.FileMode(mode)

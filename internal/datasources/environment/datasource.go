@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -107,11 +108,13 @@ data "filemanager_environment" "aws" {
 			"vars": schema.MapAttribute{
 				Description: "Map of environment variable names to their values.",
 				Computed:    true,
+				Sensitive:   true,
 				ElementType: types.StringType,
 			},
 			"var_map": schema.MapAttribute{
 				Description: "Alias for vars. Map of environment variable names to their values.",
 				Computed:    true,
+				Sensitive:   true,
 				ElementType: types.StringType,
 			},
 			"var_count": schema.Int64Attribute{
@@ -261,22 +264,16 @@ func filterEnvironment(envVars map[string]string, pattern string) map[string]str
 	return filtered
 }
 
-// matchPattern matches a string against a simple wildcard pattern.
+// matchPattern matches a string against a wildcard pattern using filepath.Match.
 func matchPattern(s, pattern string) bool {
-	if pattern == "*" {
+	if pattern == "" {
 		return true
 	}
-
-	if !strings.Contains(pattern, "*") {
+	matched, err := filepath.Match(pattern, s)
+	if err != nil {
 		return s == pattern
 	}
-
-	parts := strings.Split(pattern, "*")
-	if len(parts) == 2 {
-		return strings.HasPrefix(s, parts[0]) && strings.HasSuffix(s, parts[1])
-	}
-
-	return s == pattern
+	return matched
 }
 
 // GetEnvironmentKeys returns sorted list of environment variable names.

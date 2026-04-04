@@ -492,16 +492,27 @@ func (be *Backend) fullPath(key string) string {
 	if be.pathPrefix == "" {
 		return key
 	}
-	return path.Join(be.pathPrefix, key)
+	result := path.Join(be.pathPrefix, key)
+	// Prevent traversal outside prefix
+	if !strings.HasPrefix(result, be.pathPrefix) {
+		return be.pathPrefix
+	}
+	return result
 }
 
 func isNotFoundError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "not found") ||
-		strings.Contains(err.Error(), "404") ||
-		strings.Contains(err.Error(), "no such file")
+	// Check for typed errors with status code first
+	var apiErr interface{ StatusCode() int }
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode() == 404
+	}
+	// Fallback to string matching only for specific known patterns
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "not_found") ||
+		strings.Contains(errMsg, "no such file")
 }
 
 // Ensure Backend implements B2Backend.

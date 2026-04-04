@@ -88,7 +88,7 @@ func (r *SymlinkResource) Schema(ctx context.Context, req resource.SchemaRequest
 				Required:    true,
 			},
 			"target_type": schema.StringAttribute{
-				Description: "How to treat the target path: 'absolute' resolves relative paths to absolute paths, 'relative' keeps the target as-is. Defaults to 'absolute'.",
+				Description: "How to treat the target path: 'absolute' resolves relative targets to absolute paths (symlink breaks if directory tree moves), 'relative' keeps the target as-is (symlink is portable). Defaults to 'absolute'.",
 				Optional:    true,
 				Computed:    true,
 				Default:     stringdefault.StaticString("absolute"),
@@ -180,7 +180,7 @@ func (r *SymlinkResource) Create(ctx context.Context, req resource.CreateRequest
 
 	// Create parent directories if needed
 	if data.CreateParentDirs.ValueBool() {
-		parentDir := dirPath(data.Path.ValueString())
+		parentDir := filepath.Dir(data.Path.ValueString())
 		if parentDir != "" && parentDir != "." {
 			mkdirOpts := plugin.MkdirOptions{
 				Mode:      0755,
@@ -278,8 +278,22 @@ func (r *SymlinkResource) Read(ctx context.Context, req resource.ReadRequest, re
 		)
 	}
 
+	// Read actual symlink target from disk for drift detection
+	linkPath := data.Path.ValueString()
+	actualTarget, readlinkErr := os.Readlink(linkPath)
+	if readlinkErr != nil {
+		if os.IsNotExist(readlinkErr) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
+		resp.Diagnostics.AddError("Failed to read symlink", readlinkErr.Error())
+		return
+	}
+	// Update target if it has changed (drift detection)
+	data.Target = types.StringValue(actualTarget)
+
 	// Compute resolved path based on target_type
-	targetPath := data.Target.ValueString()
+	targetPath := actualTarget
 	if data.TargetType.ValueString() == "absolute" && !filepath.IsAbs(targetPath) {
 		if absTarget, err := filepath.Abs(targetPath); err == nil {
 			targetPath = absTarget
@@ -393,12 +407,3 @@ func (r *SymlinkResource) getBackend(ctx context.Context, backendName string) (p
 	return r.config.Registry.Backends.GetAlias(backendName)
 }
 
-// dirPath returns the directory portion of a path.
-func dirPath(p string) string {
-	for i := len(p) - 1; i >= 0; i-- {
-		if p[i] == '/' || p[i] == '\\' {
-			return p[:i]
-		}
-	}
-	return ""
-}
