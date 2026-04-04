@@ -1,1 +1,1 @@
-terraform import filemanager_ftp_service.main ftp-main
+terraform import filemanager_ftp_service.main ftp:ftp.example.com:21

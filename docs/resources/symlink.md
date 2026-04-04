@@ -28,7 +28,7 @@ resource "filemanager_symlink" "current_release" {
 resource "filemanager_symlink" "remote_link" {
   path    = "/opt/app/current"
   target  = "/opt/app/releases/latest"
-  service = filemanager_ssh_service.server.name
+  service = filemanager_ssh_service.server.id
 }
 ```
 

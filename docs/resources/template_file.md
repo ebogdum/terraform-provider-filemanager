@@ -24,36 +24,19 @@ resource "filemanager_template_file" "nginx_config" {
         listen {{ .port }};
         server_name {{ .domain }};
 
-        {{ if .ssl_enabled }}
-        listen 443 ssl;
-        ssl_certificate /etc/ssl/certs/{{ .domain }}.crt;
-        ssl_certificate_key /etc/ssl/private/{{ .domain }}.key;
-        {{ end }}
-
         location / {
             proxy_pass http://{{ .upstream_host }}:{{ .upstream_port }};
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
         }
-
-        {{ range .locations }}
-        location {{ .path }} {
-            {{ .directive }};
-        }
-        {{ end }}
     }
   TEMPLATE
 
   vars = {
-    port          = 80
-    domain        = var.domain
-    ssl_enabled   = var.ssl_enabled
+    port          = "80"
+    domain        = "example.com"
     upstream_host = "localhost"
-    upstream_port = 8080
-    locations     = [
-      { path = "/static", directive = "alias /var/www/static" },
-      { path = "/api", directive = "proxy_pass http://api:3000" }
-    ]
+    upstream_port = "8080"
   }
 
   create_parent_dirs = true
@@ -61,7 +44,7 @@ resource "filemanager_template_file" "nginx_config" {
 
 # Create systemd unit file from template
 resource "filemanager_template_file" "systemd_service" {
-  path     = "/etc/systemd/system/${var.service_name}.service"
+  path     = "/etc/systemd/system/myapp.service"
   template = <<-TEMPLATE
     [Unit]
     Description={{ .description }}
@@ -74,20 +57,16 @@ resource "filemanager_template_file" "systemd_service" {
     ExecStart={{ .exec_start }}
     Restart=always
     RestartSec=5
-    {{ range $key, $value := .environment }}
-    Environment="{{ $key }}={{ $value }}"
-    {{ end }}
 
     [Install]
     WantedBy=multi-user.target
   TEMPLATE
 
   vars = {
-    description = var.service_description
-    user        = var.service_user
-    working_dir = var.working_directory
-    exec_start  = var.exec_command
-    environment = var.environment_vars
+    description = "My Application Service"
+    user        = "appuser"
+    working_dir = "/opt/myapp"
+    exec_start  = "/opt/myapp/bin/server"
   }
 
   create_parent_dirs = true

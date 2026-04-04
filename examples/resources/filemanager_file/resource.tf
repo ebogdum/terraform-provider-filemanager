@@ -29,7 +29,7 @@ resource "filemanager_file" "config" {
 resource "filemanager_file" "remote" {
   path    = "/opt/app/config.txt"
   content = "Remote configuration"
-  service = filemanager_ssh_service.server.name
+  service = filemanager_ssh_service.server.id
 
   file_permission    = "0644"
   create_parent_dirs = true

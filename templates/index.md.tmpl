@@ -32,17 +32,16 @@ No authentication required. The provider uses the local filesystem by default.
 
 ```hcl
 resource "filemanager_ssh_service" "server" {
-  name        = "webserver"
-  host        = "server.example.com"
-  port        = 22
-  user        = "deploy"
-  private_key = file("~/.ssh/id_rsa")
+  host             = "server.example.com"
+  port             = 22
+  username         = "deploy"
+  private_key_file = "~/.ssh/id_rsa"
 }
 
 resource "filemanager_file" "remote_config" {
   path    = "/etc/app/config.json"
   content = jsonencode({ key = "value" })
-  service = filemanager_ssh_service.server.name
+  service = filemanager_ssh_service.server.id
 }
 ```
 
@@ -50,7 +49,6 @@ resource "filemanager_file" "remote_config" {
 
 ```hcl
 resource "filemanager_s3_service" "bucket" {
-  name       = "my-bucket"
   bucket     = "my-terraform-files"
   region     = "us-east-1"
   access_key = var.aws_access_key
@@ -60,7 +58,7 @@ resource "filemanager_s3_service" "bucket" {
 resource "filemanager_upload" "config" {
   source      = "local/config.json"
   destination = "configs/app.json"
-  service     = filemanager_s3_service.bucket.name
+  service     = filemanager_s3_service.bucket.id
 }
 ```
 

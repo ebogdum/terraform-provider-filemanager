@@ -156,7 +156,7 @@ func (r *SSHServiceResource) Schema(ctx context.Context, req resource.SchemaRequ
 				Computed:    true,
 			},
 			"service_type": schema.StringAttribute{
-				Description: "The type of service (s3, gcs, azure, b2, or ssh).",
+				Description: "The type of service. Always 'ssh' for this resource.",
 				Computed:    true,
 			},
 		},

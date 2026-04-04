@@ -72,15 +72,14 @@ output "path" {
 
 ` + "```hcl" + `
 resource "filemanager_ssh_service" "server" {
-  alias    = "my_server"
-  host     = "example.com"
-  port     = 22
-  user     = "admin"
-  key_file = "~/.ssh/id_rsa"
+  host             = "example.com"
+  port             = 22
+  username         = "admin"
+  private_key_file = "~/.ssh/id_rsa"
 }
 
 data "filemanager_environment" "remote" {
-  service = filemanager_ssh_service.server.alias
+  service = filemanager_ssh_service.server.id
 }
 ` + "```" + `
 
