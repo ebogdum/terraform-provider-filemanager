@@ -12,7 +12,7 @@ import (
 )
 
 // version is set via ldflags during build
-var version = "1.4.0"
+var version = "1.4.1"
 
 func main() {
 	var debug bool

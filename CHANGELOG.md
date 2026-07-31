@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-07-31
+
+Security-only release. No functional or API changes.
+
+### Security
+- Bump `golang.org/x/crypto` 0.46.0 → 0.53.0 — resolves 11 SSH advisories, including
+  agent key-constraint bypass, `@revoked` certificate status not enforced,
+  `VerifiedPublicKeyCallback` permission skip, FIDO/U2F presence-check bypass,
+  infinite loop on large channel writes, and multiple client/server panics and DoS paths
+- Bump `google.golang.org/grpc` 1.79.3 → 1.82.1 — resolves xDS RBAC and HTTP/2 advisories
+- Bump `golang.org/x/net` 0.48.0 → 0.56.0 — resolves HTML parser DoS and a
+  `dns/dnsmessage` panic on malformed SVCB/HTTPS records
+- Bump `golang.org/x/text` 0.37.0 → 0.39.0 — resolves an infinite loop on invalid input
+  reachable from HCL parsing and template rendering (GO-2026-5970)
+- Bump `go.opentelemetry.io/otel` and `otel/sdk` 1.40.0 → 1.44.0 — resolves `baggage`
+  header allocation amplification and BSD `kenv` PATH hijacking
+- Bump `github.com/aws/aws-sdk-go-v2/service/s3` 1.48.1 → 1.97.3 and
+  `aws/protocol/eventstream` 1.5.4 → 1.7.8 — resolves an EventStream decoder panic (DoS)
+
+### Changed
+- Bump AWS SDK v2 core to 1.43.2, `config` to 1.32.33, `credentials` to 1.19.32,
+  and `smithy-go` to 1.27.5 to match the S3 client upgrade
+
 ## [1.4.0] - 2026-04-04
 
 ### Security
