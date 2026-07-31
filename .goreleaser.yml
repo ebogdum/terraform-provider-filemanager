@@ -25,9 +25,15 @@ builds:
       - '386'
       - arm
       - arm64
+    goarm:
+      - '6'
     ignore:
       - goos: darwin
         goarch: '386'
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
     binary: '{{ .ProjectName }}_v{{ .Version }}'
 
 archives:
@@ -38,6 +44,9 @@ archives:
 checksum:
   name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
   algorithm: sha256
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
 
 signs:
   - artifacts: checksum
@@ -51,11 +60,14 @@ signs:
       - "${artifact}"
 
 release:
-  draft: true
+  draft: false
   header: |
     ## terraform-provider-filemanager v{{ .Version }}
 
-    See [CHANGELOG.md](CHANGELOG.md) for full details.
+    See [CHANGELOG.md](https://github.com/ebogdum/terraform-provider-filemanager/blob/main/CHANGELOG.md) for the full history.
+  extra_files:
+    - glob: 'terraform-registry-manifest.json'
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
 
 changelog:
   sort: asc
@@ -63,3 +75,6 @@ changelog:
     exclude:
       - '^docs:'
       - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - '^wip:'
